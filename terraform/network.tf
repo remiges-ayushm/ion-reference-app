@@ -1,43 +1,36 @@
-# Reuses remiges-ion's existing VPC/subnet — does NOT create a new network.
-# Cloud Run in remiges-trade needs Direct VPC Egress into this network to
-# reach both the existing Cloud SQL instance (private IP) and the existing
-# Memorystore instance (which has no public-IP option at all), so
-# remiges-trade must be attached to it via Shared VPC.
+# Owned VPC/subnet for Direct VPC Egress — Cloud Run needs this to reach the
+# private-IP Cloud SQL instance and the Memorystore instance (which has no
+# public-IP option at all). Single project, so no Shared VPC is needed.
 
-data "google_compute_network" "existing_vpc" {
-  provider = google.remiges_ion
-  name     = var.vpc_name
-  project  = var.remiges_ion_project_id
+resource "google_compute_network" "vpc" {
+  name                    = var.vpc_name
+  project                 = var.project_id
+  auto_create_subnetworks = false
+  depends_on              = [google_project_service.apis]
 }
 
-data "google_compute_subnetwork" "existing_subnet" {
-  provider = google.remiges_ion
-  name     = var.subnet_name
-  region   = var.region
-  project  = var.remiges_ion_project_id
+resource "google_compute_subnetwork" "subnet" {
+  name          = var.subnet_name
+  project       = var.project_id
+  region        = var.region
+  network       = google_compute_network.vpc.id
+  ip_cidr_range = var.subnet_cidr
 }
 
-# Makes remiges-ion a Shared VPC host project. Requires Shared VPC Admin
-# rights (roles/compute.xpnAdmin) at the ORG or FOLDER level to apply — plain
-# project Owner on remiges-ion is not always sufficient. Does not disrupt any
-# existing resource in remiges-ion; it only enables attaching service
-# projects.
-resource "google_compute_shared_vpc_host_project" "host" {
-  provider = google.remiges_ion
-  project  = var.remiges_ion_project_id
+# Reserved IP range + peering connection required before a Cloud SQL instance
+# can use a private IP in this VPC (Private Services Access).
+resource "google_compute_global_address" "psa_range" {
+  name          = "beckn-app-psa-range"
+  project       = var.project_id
+  purpose       = "VPC_PEERING"
+  address_type  = "INTERNAL"
+  prefix_length = var.psa_prefix_length
+  network       = google_compute_network.vpc.id
 }
 
-# Attaches remiges-trade as a service project under that host. Requires
-# compute.googleapis.com enabled in remiges-trade first (the attach call
-# fails against a project where Compute Engine API isn't on yet), and that
-# isn't otherwise inferrable from any attribute this resource reads.
-resource "google_compute_shared_vpc_service_project" "service" {
-  provider        = google.remiges_ion
-  host_project    = var.remiges_ion_project_id
-  service_project = var.project_id
-
-  depends_on = [
-    google_compute_shared_vpc_host_project.host,
-    google_project_service.apis,
-  ]
+resource "google_service_networking_connection" "psa" {
+  network                 = google_compute_network.vpc.id
+  service                 = "servicenetworking.googleapis.com"
+  reserved_peering_ranges = [google_compute_global_address.psa_range.name]
+  depends_on              = [google_project_service.apis]
 }

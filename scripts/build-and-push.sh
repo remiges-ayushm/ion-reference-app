@@ -34,6 +34,7 @@ build_and_push bap-frontend            "${ROOT}/bap-frontend"
 build_and_push bpp-frontend            "${ROOT}/bpp-frontend"
 build_and_push onix-bap                "${ROOT}/onix-bap"
 build_and_push onix-bpp                "${ROOT}/onix-bpp"
+build_and_push onix-catalog-publish    "${ROOT}/onix-catalog-publish"
 
 echo "==> done — images pushed with tag '${TAG}' to ${REGISTRY}"
 echo "    re-run terraform with -var=image_tag=${TAG} if it isn't 'latest'"

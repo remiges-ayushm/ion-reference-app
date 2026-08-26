@@ -1,6 +1,9 @@
 package catalog
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // ProviderPublishRequest is what a provider sends to POST /v1/catalog/publish.
 // Beckn context fields (bppId, networkId, etc.) are intentionally absent —
@@ -80,6 +83,106 @@ func ToCDSCatalog(cat Catalog) CDSCatalog {
 		Resources:  cdsResources,
 		Offers:     cat.Offers,
 		Validity:   cat.Validity,
+	}
+}
+
+// ---------------------------------------------------------------------------
+// onix-catalog-publisher payload types — a separate destination from the CDS
+// types above, with its own shape (bppId/bppUri/isActive on the catalog,
+// provider+availableAt duplicated per resource, and publishDirectives lifted
+// to a top-level array keyed by catalogId). Used only by the provider-facing
+// publish path (PublishService.forwardToCDS); the CDS types above are
+// untouched and still used by the dashboard publish path.
+// ---------------------------------------------------------------------------
+
+type OnixPublishRequest struct {
+	Context BecknContext       `json:"context"`
+	Message OnixPublishMessage `json:"message"`
+}
+
+type OnixPublishMessage struct {
+	Catalogs          []OnixCatalog          `json:"catalogs"`
+	PublishDirectives []OnixPublishDirective `json:"publishDirectives,omitempty"`
+}
+
+type OnixCatalog struct {
+	ID         string         `json:"id"`
+	BppID      string         `json:"bppId"`
+	BppURI     string         `json:"bppUri"`
+	IsActive   bool           `json:"isActive"`
+	Descriptor Descriptor     `json:"descriptor"`
+	Provider   Provider       `json:"provider"`
+	Resources  []OnixResource `json:"resources,omitempty"`
+	Offers     []Offer        `json:"offers,omitempty"`
+	Validity   *TimePeriod    `json:"validity,omitempty"`
+}
+
+// OnixResource mirrors Resource but adds provider + availableAt (duplicated
+// from the catalog's provider — no per-resource location data exists yet)
+// and omits rating (no rating aggregate exists yet) and stockQuantity
+// (BPP-internal, same reasoning as CDSResource).
+type OnixResource struct {
+	ID                 string          `json:"id"`
+	Descriptor         Descriptor      `json:"descriptor"`
+	ResourceAttributes json.RawMessage `json:"resourceAttributes,omitempty"`
+	Provider           *Provider       `json:"provider,omitempty"`
+	AvailableAt        []Location      `json:"availableAt,omitempty"`
+}
+
+type OnixPublishDirective struct {
+	CatalogID   string   `json:"catalogId"`
+	VisibleTo   []string `json:"visibleTo,omitempty"`
+	CatalogType string   `json:"catalogType,omitempty"`
+}
+
+// onixVisibleToNetworks is a hardcoded placeholder for publishDirectives.visibleTo
+// until a real per-catalog/config-driven source exists.
+var onixVisibleToNetworks = []string{
+	"beckn.one/testnet",
+	"nfh.global/testnet",
+	"ion.id/ion-launch",
+}
+
+// ToOnixCatalog converts a Catalog into the shape onix-catalog-publisher
+// expects: bppId/bppUri/isActive stamped on the catalog, and the catalog's
+// provider (incl. availableAt) duplicated onto every resource.
+func ToOnixCatalog(cat Catalog, bppID, bppURI string) OnixCatalog {
+	resources := make([]OnixResource, len(cat.Resources))
+	for i, r := range cat.Resources {
+		provider := cat.Provider
+		resources[i] = OnixResource{
+			ID:                 r.ID,
+			Descriptor:         r.Descriptor,
+			ResourceAttributes: r.ResourceAttributes,
+			Provider:           &provider,
+			AvailableAt:        cat.Provider.AvailableAt,
+		}
+	}
+	return OnixCatalog{
+		ID:         cat.ID,
+		BppID:      bppID,
+		BppURI:     bppURI,
+		IsActive:   true,
+		Descriptor: cat.Descriptor,
+		Provider:   cat.Provider,
+		Resources:  resources,
+		Offers:     cat.Offers,
+		Validity:   cat.Validity,
+	}
+}
+
+// ToOnixPublishDirective builds the top-level publishDirectives entry for
+// one catalog, keyed by catalogId so multi-catalog requests produce one
+// directive per catalog.
+func ToOnixPublishDirective(cat Catalog) OnixPublishDirective {
+	catalogType := "REGULAR"
+	if cat.PublishDirectives != nil && cat.PublishDirectives.CatalogType != "" {
+		catalogType = strings.ToUpper(cat.PublishDirectives.CatalogType)
+	}
+	return OnixPublishDirective{
+		CatalogID:   cat.ID,
+		VisibleTo:   onixVisibleToNetworks,
+		CatalogType: catalogType,
 	}
 }
 

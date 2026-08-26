@@ -13,7 +13,7 @@ resource "google_cloud_run_v2_service" "bap" {
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
-  depends_on          = [google_project_service.apis, google_compute_shared_vpc_service_project.service, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor]
+  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
 
   template {
     service_account = google_service_account.cloud_run_sa.email
@@ -25,8 +25,8 @@ resource "google_cloud_run_v2_service" "bap" {
 
     vpc_access {
       network_interfaces {
-        network    = data.google_compute_network.existing_vpc.id
-        subnetwork = data.google_compute_subnetwork.existing_subnet.id
+        network    = google_compute_network.vpc.id
+        subnetwork = google_compute_subnetwork.subnet.id
       }
       egress = "PRIVATE_RANGES_ONLY"
     }
@@ -150,7 +150,7 @@ resource "google_cloud_run_v2_service" "bap" {
     containers {
       name  = "cloudsql-proxy"
       image = local.cloudsql_proxy_image
-      args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", data.google_sql_database_instance.existing.connection_name]
+      args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", google_sql_database_instance.postgres.connection_name]
 
       startup_probe {
         tcp_socket {

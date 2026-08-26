@@ -6,12 +6,13 @@
 
 locals {
   public_services = {
-    bap          = google_cloud_run_v2_service.bap.name
-    bpp          = google_cloud_run_v2_service.bpp.name
-    bap_frontend = google_cloud_run_v2_service.bap_frontend.name
-    bpp_frontend = google_cloud_run_v2_service.bpp_frontend.name
-    onix_bap     = google_cloud_run_v2_service.onix_bap.name
-    onix_bpp     = google_cloud_run_v2_service.onix_bpp.name
+    bap                  = google_cloud_run_v2_service.bap.name
+    bpp                  = google_cloud_run_v2_service.bpp.name
+    bap_frontend         = google_cloud_run_v2_service.bap_frontend.name
+    bpp_frontend         = google_cloud_run_v2_service.bpp_frontend.name
+    onix_bap             = google_cloud_run_v2_service.onix_bap.name
+    onix_bpp             = google_cloud_run_v2_service.onix_bpp.name
+    onix_catalog_publish = google_cloud_run_v2_service.onix_catalog_publish.name
   }
 }
 

@@ -1,0 +1,1450 @@
+diff --git a/INFRA_SETUP.md b/INFRA_SETUP.md
+index 07a270c..1ca5c0b 100644
+--- a/INFRA_SETUP.md
++++ b/INFRA_SETUP.md
+@@ -25,8 +25,9 @@ independent tracks:
+ | `onix-bpp` | Beckn network adapter for bpp | 8082 | `onix-bpp/` |
+ 
+ Plus Postgres and two Redis instances, all defined in `docker-compose.yml`
+-for local dev (in the cloud, these are *reused* from an existing project's
+-Cloud SQL/Memorystore — see the cloud section).
++for local dev (in the cloud, these are a dedicated Cloud SQL instance and a
++dedicated Memorystore instance created in the same project — see the cloud
++section).
+ 
+ ## 1. Local development (Docker Compose)
+ 
+@@ -109,24 +110,31 @@ to the *old* container IP and you'll get `502 Bad Gateway`. Either
+ ## 2. Cloud deployment (Cloud Run)
+ 
+ Full step-by-step is in [`terraform/README.md`](terraform/README.md) —
+-including the org/IAM prerequisites, the exact bootstrap command sequence,
+-and 11 specific, real gotchas encountered getting this working (not
+-hypothetical ones). Condensed version:
+-
+-1. Own (or get access to) a GCP project to deploy into, and — if you're
+-   reusing an existing Cloud SQL/Memorystore from a *different* project like
+-   this deployment does — confirm that other project belongs to a GCP
+-   organization (Shared VPC requires it) and you can get
+-   `roles/compute.xpnAdmin` granted at the org level, at least temporarily.
++including the exact bootstrap command sequence and the specific, real
++gotchas encountered getting this working (not hypothetical ones). Condensed
++version:
++
++1. Own (or get access to) a GCP project to deploy into, with a billing
++   account linked. Everything — Cloud Run, a new Cloud SQL Postgres
++   instance, a new Memorystore Redis instance, VPC/subnet — lives in this
++   one project. No second project, no Shared VPC.
+ 2. Create the Terraform state bucket, `terraform.tfvars` with your project
+-   ID, and bootstrap APIs + Artifact Registry + empty secret containers.
++   ID and network identity values (`bap_id`/`bpp_id`/`network_id`/
++   `cds_discover_url`/`cds_publish_url` — no defaults exist for these, by
++   design), and bootstrap APIs + Artifact Registry + empty secret
++   containers.
+ 3. Seed secrets — same identity/key material as local dev's `.env` and
+-   `config/local-simple-{bap,bpp}.yaml`, if you want cloud and local to
+-   represent the same registered participant (recommended, see below).
++   `config/local-simple-{bap,bpp}.yaml` if you want cloud and local to
++   represent the same registered participant, or a separate registered
++   identity if this deployment is meant to be a distinct participant
++   (recommended for a personal sandbox — keeps it isolated from any other
++   deployment's identity).
+ 4. Build and push all 8 images (6 services + 2 migrate-job images).
+-5. Set up Shared VPC, then apply everything else. The very first full apply
+-   will fail on `bap`/`bpp` — that's expected, run the migrate jobs and
+-   apply again (see `terraform/README.md`'s bootstrap sequence for why).
++5. Create the VPC/subnet, Private Services Access peering, Cloud SQL
++   instance, and Redis instance (Cloud SQL creation is slow — budget 5-10
++   minutes), then apply everything else. The very first full apply will
++   fail on `bap`/`bpp` — that's expected, run the migrate jobs and apply
++   again (see `terraform/README.md`'s bootstrap sequence for why).
+ 
+ ## 3. Keeping local and cloud in sync
+ 
+@@ -139,12 +147,18 @@ subscriber-identity-mismatch errors:
+ |---|---|---|
+ | App-level signing key (`BAP_PRIVATE_KEY`/`BAP_KEY_ID`, `BPP_PRIVATE_KEY`/`BPP_KEY_ID`) | root `.env` | `bap-private-key`/`bap-key-id`/`bpp-private-key`/`bpp-key-id` secrets in Secret Manager |
+ | Onix keyManager identity (`networkParticipant`, `keyId`, signing/encr keys) | `config/local-simple-{bap,bpp}.yaml` | `bap-onix-*`/`bpp-onix-*` secrets in Secret Manager |
+-| Subscriber ID used in `context.bapId`/`bppId` | `docker-compose.yml`'s `BAP_ID`/`BPP_ID` | `terraform/variables.tf`'s `bap_id`/`bpp_id` |
+-| Network ID | `docker-compose.yml`'s `NETWORK_ID` (+ both apps' `cmd/server/.env`) | `terraform/variables.tf`'s `network_id` |
++| Subscriber ID used in `context.bapId`/`bppId` | `docker-compose.yml`'s `BAP_ID`/`BPP_ID` | `terraform/terraform.tfvars`'s `bap_id`/`bpp_id` |
++| Network ID | `docker-compose.yml`'s `NETWORK_ID` (+ both apps' `cmd/server/.env`) | `terraform/terraform.tfvars`'s `network_id` |
+ 
+ After any cloud secret update, the affected Cloud Run service needs a forced
+ new revision to actually pick up the change — see `terraform/README.md`'s
+-Gotcha #11.
++Gotcha #9.
++
++Note: by default this deployment's cloud identity is a *separate* registered
++participant from local dev's (see §2 above), not the same one — so "keeping
++in sync" here mainly matters within the cloud track itself (e.g. after
++rotating this deployment's own keys), not necessarily between local and
++cloud.
+ 
+ ## 4. Known unresolved issue
+ 
+diff --git a/bpp-application/internal/catalog/publish_service.go b/bpp-application/internal/catalog/publish_service.go
+index f9a3797..8eb91be 100644
+--- a/bpp-application/internal/catalog/publish_service.go
++++ b/bpp-application/internal/catalog/publish_service.go
+@@ -131,12 +131,14 @@ func (s *PublishService) forwardToCDS(ctx context.Context, txID uuid.UUID, req *
+ 	start := time.Now()
+ 	outboundMsgID := uuid.New()
+ 
+-	cdsCatalogs := make([]CDSCatalog, len(req.Catalogs))
++	onixCatalogs := make([]OnixCatalog, len(req.Catalogs))
++	directives := make([]OnixPublishDirective, len(req.Catalogs))
+ 	for i, c := range req.Catalogs {
+-		cdsCatalogs[i] = ToCDSCatalog(c)
++		onixCatalogs[i] = ToOnixCatalog(c, s.cfg.BppID, s.cfg.BppURI)
++		directives[i] = ToOnixPublishDirective(c)
+ 	}
+ 
+-	becknReq := BecknPublishRequest{
++	becknReq := OnixPublishRequest{
+ 		Context: BecknContext{
+ 			Version:       "2.0.0",
+ 			Action:        "catalog/publish",
+@@ -147,7 +149,7 @@ func (s *PublishService) forwardToCDS(ctx context.Context, txID uuid.UUID, req *
+ 			BppURI:        s.cfg.BppURI,
+ 			NetworkID:     s.cfg.NetworkID,
+ 		},
+-		Message: BecknPublishMessage{Catalogs: cdsCatalogs},
++		Message: OnixPublishMessage{Catalogs: onixCatalogs, PublishDirectives: directives},
+ 	}
+ 
+ 	becknReqJSON, _ := json.Marshal(becknReq)
+@@ -287,13 +289,17 @@ func upsertCatalog(ctx context.Context, q *dbsqlc.Queries, bppID, bppURI string,
+ 		DescriptorLongDesc:   strPtr(cat.Descriptor.LongDesc),
+ 		DescriptorDocs:       emptyJSONArray,
+ 		DescriptorMediaFiles: mediaJSON,
+-		CatalogType:  catType,
++		CatalogType:          catType,
+ 		ValidityStart: parseTimestamp(func() string {
+-			if cat.Validity != nil { return cat.Validity.StartDate }
++			if cat.Validity != nil {
++				return cat.Validity.StartDate
++			}
+ 			return ""
+ 		}()),
+ 		ValidityEnd: parseTimestamp(func() string {
+-			if cat.Validity != nil { return cat.Validity.EndDate }
++			if cat.Validity != nil {
++				return cat.Validity.EndDate
++			}
+ 			return ""
+ 		}()),
+ 	})
+diff --git a/bpp-application/internal/catalog/types.go b/bpp-application/internal/catalog/types.go
+index b7a9941..1aa26f5 100644
+--- a/bpp-application/internal/catalog/types.go
++++ b/bpp-application/internal/catalog/types.go
+@@ -1,6 +1,9 @@
+ package catalog
+ 
+-import "encoding/json"
++import (
++	"encoding/json"
++	"strings"
++)
+ 
+ // ProviderPublishRequest is what a provider sends to POST /v1/catalog/publish.
+ // Beckn context fields (bppId, networkId, etc.) are intentionally absent —
+@@ -83,6 +86,106 @@ func ToCDSCatalog(cat Catalog) CDSCatalog {
+ 	}
+ }
+ 
++// ---------------------------------------------------------------------------
++// onix-catalog-publisher payload types — a separate destination from the CDS
++// types above, with its own shape (bppId/bppUri/isActive on the catalog,
++// provider+availableAt duplicated per resource, and publishDirectives lifted
++// to a top-level array keyed by catalogId). Used only by the provider-facing
++// publish path (PublishService.forwardToCDS); the CDS types above are
++// untouched and still used by the dashboard publish path.
++// ---------------------------------------------------------------------------
++
++type OnixPublishRequest struct {
++	Context BecknContext       `json:"context"`
++	Message OnixPublishMessage `json:"message"`
++}
++
++type OnixPublishMessage struct {
++	Catalogs          []OnixCatalog          `json:"catalogs"`
++	PublishDirectives []OnixPublishDirective `json:"publishDirectives,omitempty"`
++}
++
++type OnixCatalog struct {
++	ID         string         `json:"id"`
++	BppID      string         `json:"bppId"`
++	BppURI     string         `json:"bppUri"`
++	IsActive   bool           `json:"isActive"`
++	Descriptor Descriptor     `json:"descriptor"`
++	Provider   Provider       `json:"provider"`
++	Resources  []OnixResource `json:"resources,omitempty"`
++	Offers     []Offer        `json:"offers,omitempty"`
++	Validity   *TimePeriod    `json:"validity,omitempty"`
++}
++
++// OnixResource mirrors Resource but adds provider + availableAt (duplicated
++// from the catalog's provider — no per-resource location data exists yet)
++// and omits rating (no rating aggregate exists yet) and stockQuantity
++// (BPP-internal, same reasoning as CDSResource).
++type OnixResource struct {
++	ID                 string          `json:"id"`
++	Descriptor         Descriptor      `json:"descriptor"`
++	ResourceAttributes json.RawMessage `json:"resourceAttributes,omitempty"`
++	Provider           *Provider       `json:"provider,omitempty"`
++	AvailableAt        []Location      `json:"availableAt,omitempty"`
++}
++
++type OnixPublishDirective struct {
++	CatalogID   string   `json:"catalogId"`
++	VisibleTo   []string `json:"visibleTo,omitempty"`
++	CatalogType string   `json:"catalogType,omitempty"`
++}
++
++// onixVisibleToNetworks is a hardcoded placeholder for publishDirectives.visibleTo
++// until a real per-catalog/config-driven source exists.
++var onixVisibleToNetworks = []string{
++	"beckn.one/testnet",
++	"nfh.global/testnet",
++	"ion.id/ion-launch",
++}
++
++// ToOnixCatalog converts a Catalog into the shape onix-catalog-publisher
++// expects: bppId/bppUri/isActive stamped on the catalog, and the catalog's
++// provider (incl. availableAt) duplicated onto every resource.
++func ToOnixCatalog(cat Catalog, bppID, bppURI string) OnixCatalog {
++	resources := make([]OnixResource, len(cat.Resources))
++	for i, r := range cat.Resources {
++		provider := cat.Provider
++		resources[i] = OnixResource{
++			ID:                 r.ID,
++			Descriptor:         r.Descriptor,
++			ResourceAttributes: r.ResourceAttributes,
++			Provider:           &provider,
++			AvailableAt:        cat.Provider.AvailableAt,
++		}
++	}
++	return OnixCatalog{
++		ID:         cat.ID,
++		BppID:      bppID,
++		BppURI:     bppURI,
++		IsActive:   true,
++		Descriptor: cat.Descriptor,
++		Provider:   cat.Provider,
++		Resources:  resources,
++		Offers:     cat.Offers,
++		Validity:   cat.Validity,
++	}
++}
++
++// ToOnixPublishDirective builds the top-level publishDirectives entry for
++// one catalog, keyed by catalogId so multi-catalog requests produce one
++// directive per catalog.
++func ToOnixPublishDirective(cat Catalog) OnixPublishDirective {
++	catalogType := "REGULAR"
++	if cat.PublishDirectives != nil && cat.PublishDirectives.CatalogType != "" {
++		catalogType = strings.ToUpper(cat.PublishDirectives.CatalogType)
++	}
++	return OnixPublishDirective{
++		CatalogID:   cat.ID,
++		VisibleTo:   onixVisibleToNetworks,
++		CatalogType: catalogType,
++	}
++}
++
+ // ---------------------------------------------------------------------------
+ // Shared domain types (used in both provider request and CDS forward payload)
+ // ---------------------------------------------------------------------------
+diff --git a/bpp-application/internal/dashboardsvc/catalog_handlers.go b/bpp-application/internal/dashboardsvc/catalog_handlers.go
+index e401872..aaebe14 100644
+--- a/bpp-application/internal/dashboardsvc/catalog_handlers.go
++++ b/bpp-application/internal/dashboardsvc/catalog_handlers.go
+@@ -519,19 +519,20 @@ func (h *Handler) HandlePublishCatalog(c *gin.Context) {
+ 		DescriptorLongDesc  *string
+ 		ProviderID          string
+ 		ProviderName        string
++		CatalogType         *string
+ 		ValidityStart       pgtype.Timestamptz
+ 		ValidityEnd         pgtype.Timestamptz
+ 	}
+ 	err := h.pool.QueryRow(ctx, `
+ 		SELECT c.descriptor_name, c.descriptor_short_desc, c.descriptor_long_desc,
+-		       c.provider_id, COALESCE(p.descriptor_name, c.provider_id),
++		       c.provider_id, COALESCE(p.descriptor_name, c.provider_id), c.catalog_type,
+ 		       c.validity_start, c.validity_end
+ 		FROM catalogs c
+ 		LEFT JOIN providers p ON p.id = c.provider_id AND p.bpp_id = c.bpp_id
+ 		WHERE c.id = $1 AND c.bpp_id = $2 AND c.deleted_at IS NULL`,
+ 		catalogID, h.cfg.BppID,
+ 	).Scan(&cat.DescriptorName, &cat.DescriptorShortDesc, &cat.DescriptorLongDesc,
+-		&cat.ProviderID, &cat.ProviderName, &cat.ValidityStart, &cat.ValidityEnd)
++		&cat.ProviderID, &cat.ProviderName, &cat.CatalogType, &cat.ValidityStart, &cat.ValidityEnd)
+ 	if err != nil {
+ 		c.JSON(http.StatusNotFound, gin.H{"error": "catalog not found"})
+ 		return
+@@ -550,6 +551,9 @@ func (h *Handler) HandlePublishCatalog(c *gin.Context) {
+ 			Descriptor: catalog.Descriptor{Name: cat.ProviderName},
+ 		},
+ 	}
++	if cat.CatalogType != nil && *cat.CatalogType != "" {
++		becknCat.PublishDirectives = &catalog.PublishDirectives{CatalogType: *cat.CatalogType}
++	}
+ 	if cat.ValidityStart.Valid && cat.ValidityEnd.Valid {
+ 		becknCat.Validity = &catalog.TimePeriod{
+ 			StartDate: cat.ValidityStart.Time.UTC().Format(time.RFC3339),
+@@ -677,19 +681,20 @@ func (h *Handler) HandlePublishCatalog(c *gin.Context) {
+ 	txID := uuid.New()
+ 	msgID := uuid.New()
+ 
+-	becknReq := map[string]any{
+-		"context": map[string]string{
+-			"version":       "2.0.0",
+-			"action":        "catalog/publish",
+-			"timestamp":     time.Now().UTC().Format(time.RFC3339),
+-			"transactionId": txID.String(),
+-			"messageId":     msgID.String(),
+-			"bppId":         h.cfg.BppID,
+-			"bppUri":        h.cfg.BppURI,
+-			"networkId":     h.cfg.NetworkID,
++	becknReq := catalog.OnixPublishRequest{
++		Context: catalog.BecknContext{
++			Version:       "2.0.0",
++			Action:        "catalog/publish",
++			Timestamp:     time.Now().UTC().Format(time.RFC3339),
++			TransactionID: txID.String(),
++			MessageID:     msgID.String(),
++			BppID:         h.cfg.BppID,
++			BppURI:        h.cfg.BppURI,
++			NetworkID:     h.cfg.NetworkID,
+ 		},
+-		"message": map[string]any{
+-			"catalogs": []catalog.CDSCatalog{catalog.ToCDSCatalog(becknCat)},
++		Message: catalog.OnixPublishMessage{
++			Catalogs:          []catalog.OnixCatalog{catalog.ToOnixCatalog(becknCat, h.cfg.BppID, h.cfg.BppURI)},
++			PublishDirectives: []catalog.OnixPublishDirective{catalog.ToOnixPublishDirective(becknCat)},
+ 		},
+ 	}
+ 
+diff --git a/docker-compose.yml b/docker-compose.yml
+index 5adfc2f..90ae89a 100644
+--- a/docker-compose.yml
++++ b/docker-compose.yml
+@@ -99,6 +99,37 @@ services:
+       - ./schemas:/app/schemas
+     command: [ "./server", "--config=/app/config/local-simple-bpp.yaml" ]
+ 
++  # ─── Catalog Publish (standalone) ─────────────────────────────────────────
++  # File-based catalog/publish onix container, isolated from onix-bpp's txn
++  # routes and from the Go `bpp` app's Postgres/CDS-forwarding publish route.
++  # Config + published output live under file-onboarding-and-catalog-publish/.
++  # See file-onboarding-and-catalog-publish/README.md.
++  #
++  #   Catalog publish (internal trigger): http://localhost:8085/catalog/publish
++  #
++  # NOT fidedocker/onix-adapter:latest -- that image lacks the catalogPublish
++  # handler type and fails startup with "invalid module : catalogPublish".
++  onix-catalog-publish:
++    image: fidedocker/catalog-publisher:latest
++    container_name: onix-catalog-publish
++    platform: linux/amd64
++    restart: unless-stopped
++    networks:
++      - beckn
++    ports:
++      - "8085:8085"
++    environment:
++      CONFIG_FILE: "/app/config/catalog-publish.yaml"
++      REDIS_ADDR: redis-bpp:6379
++    depends_on:
++      redis-bpp:
++        condition: service_healthy
++    volumes:
++      - ./file-onboarding-and-catalog-publish/config:/app/config
++      - ./schemas:/app/schemas
++      - ./file-onboarding-and-catalog-publish/data/beckn:/beckn
++    command: [ "./server", "--config=/app/config/catalog-publish.yaml" ]
++
+   # ─── BPP Application ──────────────────────────────────────────────────────
+   bpp:
+     build:
+@@ -134,7 +165,7 @@ services:
+       # BppCallerURL is the ONIX BPP caller base URL used for outbound on_* callbacks.
+       BPP_CALLER_URL: http://onix-bpp:8082/bpp/caller
+ 
+-      CDS_PUBLISH_URL: "https://fabric.nfh.global/beckn/catalog/publish" # BPP → CDS catalog publish endpoint
++      CDS_PUBLISH_URL: "http://onix-catalog-publish:8085/catalog/publish" # BPP → onix-catalog-publish (local docker network)
+ 
+       # Ed25519 signing key registered for onix-bpp-x7m2wmy7nq-et.a.run.app —
+       # signs outbound requests to CDS_PUBLISH_URL, and is the SAME keypair as
+diff --git a/terraform/README.md b/terraform/README.md
+index 0545671..0edf870 100644
+--- a/terraform/README.md
++++ b/terraform/README.md
+@@ -1,31 +1,33 @@
+ # GCP deployment (Cloud Run, scale-to-zero)
+ 
+ Deploys beckn-app's six services (bap, bpp, bap-frontend, bpp-frontend,
+-onix-bap, onix-bpp) to Cloud Run in the `remiges-trade` project, reusing the
+-**existing** Cloud SQL instance (`insurance-postgres`) and Memorystore
+-instance (`insurance-redis`) that live in the separate `remiges-ion` project
+-— no new database/cache instances are created.
++onix-bap, onix-bpp) to Cloud Run in a single GCP project (`ion-sandbox-001`
++by default), along with a dedicated Cloud SQL Postgres instance and a
++dedicated Memorystore Redis instance created inside that same project.
++Everything lives in one project — no Shared VPC, no cross-project reuse.
+ 
+ This directory replaces `docker-compose.yml`'s Docker-network hostnames
+ (`http://bap:8083`, `redis-bap:6379`, ...) with Cloud Run's per-service HTTPS
+-URLs and the reused instances' addresses.
++URLs and the new instances' addresses.
+ 
+ ## Architecture notes
+ 
+-- **Cross-project reuse**: remiges-ion is a Shared VPC host project and
+-  remiges-trade is attached as a service project, so Cloud Run in
+-  remiges-trade can reach `insurance-app-vpc` via Direct VPC Egress. This is
+-  required because Memorystore has no public-IP option at all. See
+-  `network.tf`.
+-- **New databases, not a new instance**: `trade_bap`/`trade_bpp` databases +
+-  a `trade` SQL user are created on the *existing* `insurance-postgres`
+-  instance, namespaced separately from the insurance app's own
+-  `insurance_bap`/`insurance_bpp` databases. See `sql.tf`.
+-- **Shared Redis**: onix-bap and onix-bpp both point at the one existing
+-  `insurance-redis` instance — same instance the insurance app's own onix
+-  adapters use. This has actually caused a stale/foreign cached routing
+-  decision to surface once in practice (see Gotchas below) — not just a
+-  theoretical risk.
++- **Single project, owned resources**: `network.tf` creates a VPC + subnet,
++  `sql.tf` creates a new Cloud SQL Postgres instance, `redis.tf` creates a
++  new Memorystore Redis instance — all in `var.project_id`. Cloud Run reaches
++  both via Direct VPC Egress into the owned subnet.
++- **Private Services Access for Cloud SQL**: Cloud SQL's private IP requires
++  a reserved peering range (`google_compute_global_address` with
++  `purpose = "VPC_PEERING"`) and a `google_service_networking_connection`
++  peering the VPC with `servicenetworking.googleapis.com`, created before the
++  instance itself. See `network.tf`.
++- **Redis via Direct Peering**: Memorystore uses its own peering mechanism
++  (`connect_mode = "DIRECT_PEERING"`, a separate reserved CIDR from the PSA
++  range) — simpler than Cloud SQL's setup, no `google_service_networking_connection`
++  needed for it. See `redis.tf`.
++- **Dedicated Redis, no cross-tenant risk**: unlike a shared/reused instance,
++  this Redis is created solely for this deployment — no risk of another
++  tenant's cached routing decision colliding with this app's.
+ - **Custom onix images**: `onix-bap/` and `onix-bpp/` wrap the vendor's
+   `fidedocker/onix-adapter` image with an `entrypoint.sh` that runs
+   `envsubst` over `.yaml.tmpl` templates (the real `keyManager`/`router`/
+@@ -54,53 +56,48 @@ URLs and the reused instances' addresses.
+   `BAP_PRIVATE_KEY`/`BAP_KEY_ID` (the app's own key for signing direct CDS
+   calls) must also be the *same keypair* as the onix keyManager's signing
+   key — there is only one registered identity per side, not two. See the
+-  first Gotcha below for what happens if this drifts.
++  first Gotcha below for what happens if this drifts. This deployment uses
++  its own separate registered identity (not the same one as local dev or any
++  other deployment) — `bap_id`/`bpp_id`/etc. have no default in
++  `variables.tf` on purpose, so `terraform plan` fails loudly until
++  `terraform.tfvars` supplies real values.
+ 
+ ## Prerequisites
+ 
+-- `gcloud` CLI, authenticated, with Owner (or equivalent) on both
+-  `remiges-trade` and `remiges-ion`.
+-- **`remiges-ion` must belong to a GCP organization.** Shared VPC host
+-  project enablement fails with `Error 400: Invalid resource usage: 'The
+-  project has no organization.'` on a fully standalone project. If it's
+-  standalone, move it first:
+-  ```sh
+-  gcloud beta projects move remiges-ion --organization=<ORG_ID>
+-  ```
+-- **Shared VPC Admin** (`roles/compute.xpnAdmin`) at the organization level —
+-  plain project Owner is NOT sufficient for
+-  `google_compute_shared_vpc_host_project`. Grant it to yourself if you have
+-  `roles/resourcemanager.organizationAdmin` (or ask someone who does):
+-  ```sh
+-  gcloud organizations add-iam-policy-binding <ORG_ID> \
+-    --member="user:you@example.com" --role="roles/compute.xpnAdmin"
+-  ```
+-  This only needs to exist for the one-time Shared VPC setup step below —
+-  safe to revoke afterward (`remove-iam-policy-binding` with the same args),
+-  since it isn't needed again unless Shared VPC is destroyed and recreated.
++- `gcloud` CLI, authenticated, with Owner (or equivalent) on the target
++  project.
++- **A billing account linked to the project.** A brand-new project has none
++  by default — `google_project_service.apis` fails immediately without one.
+ - Application Default Credentials set up: `gcloud auth application-default
+   login` and `gcloud auth application-default set-quota-project
+-  remiges-trade` (separate from `gcloud auth login` — Terraform's provider
++  <PROJECT_ID>` (separate from `gcloud auth login` — Terraform's provider
+   reads a different credential store).
+ - `terraform` >= 1.5, `docker`.
+ - The wiring step shells out to `gcloud run services update` during
+-  `terraform apply` — make sure `gcloud` is authenticated against
+-  `remiges-trade` on the machine running `terraform apply`.
++  `terraform apply` — make sure `gcloud` is authenticated against the target
++  project on the machine running `terraform apply`.
+ 
+ ## Bootstrap sequence
+ 
+ 1. One-time state bucket (chicken-and-egg — Terraform can't create the
+    bucket it stores its own state in):
+    ```sh
+-   gcloud storage buckets create gs://remiges-trade-tfstate \
+-     --project=remiges-trade --location=asia-southeast2 \
++   gcloud storage buckets create gs://ion-sandbox-001-tfstate \
++     --project=ion-sandbox-001 --location=asia-southeast2 \
+      --uniform-bucket-level-access
+-   gcloud storage buckets update gs://remiges-trade-tfstate --versioning
++   gcloud storage buckets update gs://ion-sandbox-001-tfstate --versioning
+    ```
+ 
+-2. Create `terraform/terraform.tfvars` (not committed) with just your project ID:
++2. Create `terraform/terraform.tfvars` (not committed) with your project ID
++   and network identity (no defaults exist for the identity vars — see
++   Architecture notes above):
+    ```hcl
+-   project_id = "remiges-trade"
++   project_id       = "ion-sandbox-001"
++   bap_id           = "<your new onix-bap identity>"
++   bpp_id           = "<your new onix-bpp identity>"
++   network_id       = "<your registry's network id>"
++   cds_discover_url = "<your registry's discover URL>"
++   cds_publish_url  = "<your registry's publish URL>"
+    ```
+ 
+ 3. Bootstrap the things later steps depend on:
+@@ -114,9 +111,10 @@ URLs and the reused instances' addresses.
+    ```
+ 
+ 4. Seed the 14 externally-provided secrets (everything except
+-   `postgres-password`, which Terraform generates itself):
++   `postgres-password`, which Terraform generates itself) — values for this
++   deployment's own separate registered identity:
+    ```sh
+-   PROJECT_ID=remiges-trade \
++   PROJECT_ID=ion-sandbox-001 \
+      BAP_PRIVATE_KEY=... BAP_KEY_ID=... BPP_PRIVATE_KEY=... BPP_KEY_ID=... \
+      BAP_ONIX_KEY_ID=... BAP_ONIX_SIGNING_PRIVATE_KEY=... BAP_ONIX_SIGNING_PUBLIC_KEY=... \
+      BAP_ONIX_ENCR_PRIVATE_KEY=... BAP_ONIX_ENCR_PUBLIC_KEY=... \
+@@ -126,20 +124,25 @@ URLs and the reused instances' addresses.
+    ```
+    `BAP_PRIVATE_KEY`/`BAP_KEY_ID` MUST be the same keypair/identity as
+    `BAP_ONIX_SIGNING_PRIVATE_KEY`/`BAP_ONIX_KEY_ID` — see the network identity
+-   note above. The real values live in this project's git-ignored
+-   `config/local-simple-{bap,bpp}.yaml` and root `.env`, if you want this
+-   deployment to mirror local dev's identity.
++   note above.
+ 
+ 5. Build and push all 8 images:
+    ```sh
+-   PROJECT_ID=remiges-trade REGION=asia-southeast2 ../scripts/build-and-push.sh
++   PROJECT_ID=ion-sandbox-001 REGION=asia-southeast2 ../scripts/build-and-push.sh
+    ```
+ 
+-6. Set up Shared VPC (must exist before any `vpc_access` block validates):
++6. Create the VPC/subnet, Private Services Access peering, Cloud SQL
++   instance, and Redis instance (must exist before any `vpc_access` block
++   validates). Cloud SQL instance creation is slow — budget 5-10 minutes:
+    ```sh
+-   terraform plan -target=google_compute_shared_vpc_host_project.host \
+-     -target=google_compute_shared_vpc_service_project.service \
+-     -target=google_compute_subnetwork_iam_member.network_user -out=bootstrap2.tfplan
++   terraform plan -target=google_compute_network.vpc \
++     -target=google_compute_subnetwork.subnet \
++     -target=google_compute_global_address.psa_range \
++     -target=google_service_networking_connection.psa \
++     -target=google_sql_database_instance.postgres \
++     -target=google_redis_instance.redis \
++     -target=google_compute_subnetwork_iam_member.network_user \
++     -target=google_project_iam_member.cloud_sql_client -out=bootstrap2.tfplan
+    terraform apply bootstrap2.tfplan
+    ```
+ 
+@@ -153,8 +156,8 @@ URLs and the reused instances' addresses.
+ 8. Run migrations (the databases are empty until this runs — `bap`/`bpp`
+    crash-loop on startup without it):
+    ```sh
+-   gcloud run jobs execute migrate-bap --project=remiges-trade --region=asia-southeast2 --wait
+-   gcloud run jobs execute migrate-bpp --project=remiges-trade --region=asia-southeast2 --wait
++   gcloud run jobs execute migrate-bap --project=ion-sandbox-001 --region=asia-southeast2 --wait
++   gcloud run jobs execute migrate-bpp --project=ion-sandbox-001 --region=asia-southeast2 --wait
+    ```
+ 
+ 9. Re-apply — this time `bap`/`bpp` start successfully against the now-real schema:
+@@ -175,14 +178,14 @@ URLs and the reused instances' addresses.
+    onix) — the CDS itself will reject with `"subscriber identity mismatch"`
+    if that keypair's embedded subscriber doesn't match `context.bapId`
+    either. There is exactly one registered identity per side; every signing
+-   path must use it.
+-2. **`sqladmin.googleapis.com` must be enabled in the *Cloud Run* project
+-   (remiges-trade), not just wherever the Cloud SQL instance lives.** The
+-   Cloud SQL Auth Proxy sidecar calls the Cloud SQL Admin API using the
+-   calling project's own service account/quota context. Symptom:
+-   `cloudsql-proxy` container fails with `"Cloud SQL Admin API has not been
+-   used in project <number> before or it is disabled."` even though the
+-   instance's own project has it enabled.
++   path must use it. Especially easy to hit here since this deployment's
++   identity is deliberately separate from local dev's — don't let any value
++   fall back to the wrong identity.
++2. **`sqladmin.googleapis.com` must be enabled on the project.** The Cloud
++   SQL Auth Proxy sidecar calls the Cloud SQL Admin API using this project's
++   own service account/quota context. Symptom: `cloudsql-proxy` container
++   fails with `"Cloud SQL Admin API has not been used in project <number>
++   before or it is disabled."`
+ 3. **`tern.conf` renders as a Go template — literal values are never read
+    from the environment.** `jackc/tern` parses `tern.conf` through
+    `text/template` with Masterminds/sprig functions. A plain
+@@ -192,86 +195,86 @@ URLs and the reused instances' addresses.
+    host/port/user/db is hardcoded in the file, not the Cloud SQL Auth Proxy
+    sidecar — and fails with a plain connection-refused error that doesn't
+    obviously point at the real cause.
+-4. **`roles/compute.networkUser` for Direct VPC Egress with Shared VPC must
+-   go to the Cloud Run *Service Agent*
+-   (`service-<PROJECT_NUMBER>@serverless-robot-prod.iam.gserviceaccount.com`),
+-   not the workload's runtime service account.** Granting it to the runtime
+-   SA instead looks plausible (it's the identity the *rest* of the app's
+-   permissions go to) but every service with a `vpc_access` block will fail
+-   to start with a Direct VPC Egress permission error.
+-5. **`gcloud run services update`/`jobs update`'s container-scoped flags
++4. **`gcloud run services update`/`jobs update`'s container-scoped flags
+    (`--update-env-vars`, `--image`, etc.) need an explicit `--container=NAME`
+    once a service/job has more than one container** (e.g. the
+    `cloudsql-proxy` sidecar). Omitting it is either ambiguous or targets the
+    wrong container depending on gcloud version.
+-6. **Cloud Run rejects `memory < 512Mi` when CPU is "always allocated"**
++5. **Cloud Run rejects `memory < 512Mi` when CPU is "always allocated"**
+    (the default). The frontend nginx containers hit this at 256Mi even
+    though nginx barely needs it — bumped to 512Mi.
+-7. **First `terraform apply` will fail on `bap`/`bpp` even with everything
++6. **First `terraform apply` will fail on `bap`/`bpp` even with everything
+    else correct**, because the databases have no schema yet and both apps
+    `os.Exit(1)` if a required startup query fails against a table that
+    doesn't exist. The migrate jobs (Cloud Run *jobs*, not services) get
+    created fine in that same apply since jobs don't block on a health
+    check — run them, then re-apply. This is why the bootstrap sequence
+    above has an apply → migrate → apply-again shape instead of one apply.
+-8. **The registered Subscriber URL and the onix module's listening path
++7. **The registered Subscriber URL and the onix module's listening path
+    must agree.** If a participant's registry entry is a bare URL (e.g.
+    `https://onix-bpp-xxx.a.run.app`, no path), other participants doing a
+    registry-based lookup will call `<that-bare-url>/<action-name>` directly
+    — e.g. `.../select` — not `<url>/bpp/receiver/select`. If your onix
+    adapter's receiver module is only configured to listen at `/bpp/receiver/`
+    (the vendor's default), that request 404s. This is a known, currently
+-   **unresolved** issue on this deployment (`select` fails this way) — the
+-   real fix is either moving the receiver module to listen at `/`, or
+-   re-registering with the `/receiver` suffix in the URL, and hasn't been
+-   decided yet.
+-9. **Shared Redis across tenants can serve stale/foreign cached routing
+-   decisions.** Once, `onix-bap`'s router resolved `select` to a completely
+-   unrelated (and long-dead) external URL that had nothing to do with the
+-   current request — almost certainly a cache key collision on the shared
+-   `insurance-redis` instance. It self-corrected on a later attempt (cache
+-   entry expired), but there's no dedicated Redis/DB-index isolation between
+-   this app and whatever else uses that instance.
+-10. **Cloud Run pins an image tag to a specific digest at deploy time and
+-    never re-resolves it.** Pushing a new image under the same `:latest` tag
+-    does nothing to an already-running service/job — `lifecycle {
+-    ignore_changes = [...] }` on every Cloud Run resource means Terraform
+-    won't touch it either. Force it with `gcloud run services update
+-    --container=<name> --image=<new-ref>` (services) or `gcloud run jobs
+-    update --container=<name> --image=<new-ref>` (jobs).
+-11. **Secret Manager's `version = "latest"` doesn't propagate to already-running
+-    instances.** Adding a new secret version doesn't do anything until a
+-    *new revision* starts (secrets are resolved at container start, not
+-    live). Any change to a secret value needs a forced redeploy of whatever
+-    service/job reads it — a `terraform apply` that touches an unrelated
+-    field on that resource is enough, since it creates a new revision.
++   **unresolved** issue — the real fix is either moving the receiver module
++   to listen at `/`, or re-registering with the `/receiver` suffix in the
++   URL, and hasn't been decided yet.
++8. **Cloud Run pins an image tag to a specific digest at deploy time and
++   never re-resolves it.** Pushing a new image under the same `:latest` tag
++   does nothing to an already-running service/job — `lifecycle {
++   ignore_changes = [...] }` on every Cloud Run resource means Terraform
++   won't touch it either. Force it with `gcloud run services update
++   --container=<name> --image=<new-ref>` (services) or `gcloud run jobs
++   update --container=<name> --image=<new-ref>` (jobs).
++9. **Secret Manager's `version = "latest"` doesn't propagate to already-running
++   instances.** Adding a new secret version doesn't do anything until a
++   *new revision* starts (secrets are resolved at container start, not
++   live). Any change to a secret value needs a forced redeploy of whatever
++   service/job reads it — a `terraform apply` that touches an unrelated
++   field on that resource is enough, since it creates a new revision.
++10. **Cloud SQL private-IP instance creation is slow.** Budget 5-10 minutes
++    for step 6 above — it's sequenced as its own targeted apply rather than
++    bundled into the full apply, so a failure there is cheap to retry
++    without churning any Cloud Run resource.
++11. **Subnet CIDR, the PSA reserved range, and Redis's reserved IP range must
++    not overlap.** The defaults in `variables.tf` (`10.10.0.0/24` for the
++    subnet, an auto-selected `/20` for PSA, `10.20.0.0/29` for Redis) don't
++    overlap each other — if you customize any of them, check for overlap
++    before applying.
++12. **`roles/compute.networkUser` for Direct VPC Egress is granted to the
++    Cloud Run Service Agent, not the runtime SA, as a precaution.** Google's
++    docs tie this requirement specifically to Shared VPC; in a single
++    project it may not be strictly necessary. Kept anyway since it's a
++    harmless, idempotent grant — worth checking empirically on first apply
++    whether it can be removed.
+ 
+ ## Verification
+ 
+ - `terraform output bap_frontend_url bpp_frontend_url` — open both, confirm the SPA loads.
+-- `gcloud run jobs executions list --job=migrate-bap --project=remiges-trade` — confirm `Succeeded` (same for migrate-bpp).
++- `gcloud run jobs executions list --job=migrate-bap --project=ion-sandbox-001` — confirm `Succeeded` (same for migrate-bpp).
+ - Repeat the discover → select flow against the new `bap_url`, watching
+-  `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="bap"' --project=remiges-trade --freshness=5m`
++  `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="bap"' --project=ion-sandbox-001 --freshness=5m`
+   (swap the service name for `onix-bap`/`bpp`/`onix-bpp` as needed) for
+   signing errors or connectivity failures.
+ - A cloudsql-proxy sidecar failing its startup probe means the
+-  `roles/cloudsql.client` grant in remiges-ion isn't working; onix logs
+-  timing out reaching Redis means the `compute.networkUser` subnet grant
+-  isn't working.
++  `roles/cloudsql.client` grant isn't working; onix logs timing out reaching
++  Redis means the `compute.networkUser` subnet grant isn't working, or the
++  Redis instance isn't in `READY` state yet.
+ - Seed a catalog via `catalog-seed/` against the new `bpp_url`.
+ 
+ ## Redeploying after a code change
+ 
+ ```sh
+-PROJECT_ID=remiges-trade REGION=asia-southeast2 ../scripts/build-and-push.sh "$(git rev-parse --short HEAD)"
++PROJECT_ID=ion-sandbox-001 REGION=asia-southeast2 ../scripts/build-and-push.sh "$(git rev-parse --short HEAD)"
+ terraform apply -var="image_tag=$(git rev-parse --short HEAD)"
+ ```
+ (The `lifecycle { ignore_changes = [...] }` block on each Cloud Run resource
+ means a plain `terraform apply` with no tag change won't redeploy a new
+ image — you must pass a new `image_tag`. For the two migrate jobs
+-specifically, this doesn't apply the new image either — see Gotcha #10.)
++specifically, this doesn't apply the new image either — see Gotcha #8.)
+ 
+-## Inspecting the reused Cloud SQL instance
++## Inspecting the Cloud SQL instance
+ 
+ It has no public IP and isn't reachable by `cloud-sql-proxy` run outside a
+ VPC-attached environment (your laptop won't reach the private IP even with
+@@ -279,7 +282,7 @@ VPC-attached environment (your laptop won't reach the private IP even with
+ Studio** in the console instead — no network path needed, goes through the
+ Cloud SQL Admin API:
+ ```
+-https://console.cloud.google.com/sql/instances/insurance-postgres/studio?project=remiges-ion
++https://console.cloud.google.com/sql/instances/beckn-app-postgres/studio?project=ion-sandbox-001
+ ```
+ Log in inside Studio with the `trade` user and the `postgres-password`
+-secret's value (`gcloud secrets versions access latest --secret=postgres-password --project=remiges-trade`).
++secret's value (`gcloud secrets versions access latest --secret=postgres-password --project=ion-sandbox-001`).
+diff --git a/terraform/backend.tf b/terraform/backend.tf
+index be91652..e9c0287 100644
+--- a/terraform/backend.tf
++++ b/terraform/backend.tf
+@@ -4,7 +4,7 @@
+ 
+ terraform {
+   backend "gcs" {
+-    bucket = "remiges-trade-tfstate"
++    bucket = "ion-sandbox-001-tfstate"
+     prefix = "beckn-app"
+   }
+ }
+diff --git a/terraform/cloud-run-bap.tf b/terraform/cloud-run-bap.tf
+index 5f412e6..d6013ef 100644
+--- a/terraform/cloud-run-bap.tf
++++ b/terraform/cloud-run-bap.tf
+@@ -13,7 +13,7 @@ resource "google_cloud_run_v2_service" "bap" {
+   location            = var.region
+   ingress             = "INGRESS_TRAFFIC_ALL"
+   deletion_protection = false
+-  depends_on          = [google_project_service.apis, google_compute_shared_vpc_service_project.service, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor]
++  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
+ 
+   template {
+     service_account = google_service_account.cloud_run_sa.email
+@@ -25,8 +25,8 @@ resource "google_cloud_run_v2_service" "bap" {
+ 
+     vpc_access {
+       network_interfaces {
+-        network    = data.google_compute_network.existing_vpc.id
+-        subnetwork = data.google_compute_subnetwork.existing_subnet.id
++        network    = google_compute_network.vpc.id
++        subnetwork = google_compute_subnetwork.subnet.id
+       }
+       egress = "PRIVATE_RANGES_ONLY"
+     }
+@@ -150,7 +150,7 @@ resource "google_cloud_run_v2_service" "bap" {
+     containers {
+       name  = "cloudsql-proxy"
+       image = local.cloudsql_proxy_image
+-      args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", data.google_sql_database_instance.existing.connection_name]
++      args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", google_sql_database_instance.postgres.connection_name]
+ 
+       startup_probe {
+         tcp_socket {
+diff --git a/terraform/cloud-run-bpp.tf b/terraform/cloud-run-bpp.tf
+index 7ebafff..866cb29 100644
+--- a/terraform/cloud-run-bpp.tf
++++ b/terraform/cloud-run-bpp.tf
+@@ -7,7 +7,7 @@ resource "google_cloud_run_v2_service" "bpp" {
+   location            = var.region
+   ingress             = "INGRESS_TRAFFIC_ALL"
+   deletion_protection = false
+-  depends_on          = [google_project_service.apis, google_compute_shared_vpc_service_project.service, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor]
++  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
+ 
+   template {
+     service_account = google_service_account.cloud_run_sa.email
+@@ -19,8 +19,8 @@ resource "google_cloud_run_v2_service" "bpp" {
+ 
+     vpc_access {
+       network_interfaces {
+-        network    = data.google_compute_network.existing_vpc.id
+-        subnetwork = data.google_compute_subnetwork.existing_subnet.id
++        network    = google_compute_network.vpc.id
++        subnetwork = google_compute_subnetwork.subnet.id
+       }
+       egress = "PRIVATE_RANGES_ONLY"
+     }
+@@ -134,7 +134,7 @@ resource "google_cloud_run_v2_service" "bpp" {
+     containers {
+       name  = "cloudsql-proxy"
+       image = local.cloudsql_proxy_image
+-      args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", data.google_sql_database_instance.existing.connection_name]
++      args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", google_sql_database_instance.postgres.connection_name]
+ 
+       startup_probe {
+         tcp_socket {
+diff --git a/terraform/cloud-run-jobs.tf b/terraform/cloud-run-jobs.tf
+index 44eb79e..537b78b 100644
+--- a/terraform/cloud-run-jobs.tf
++++ b/terraform/cloud-run-jobs.tf
+@@ -14,7 +14,7 @@ resource "google_cloud_run_v2_job" "migrate_bap" {
+   name       = "migrate-bap"
+   project    = var.project_id
+   location   = var.region
+-  depends_on = [google_project_service.apis, google_compute_shared_vpc_service_project.service, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor]
++  depends_on = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
+ 
+   template {
+     template {
+@@ -23,8 +23,8 @@ resource "google_cloud_run_v2_job" "migrate_bap" {
+ 
+       vpc_access {
+         network_interfaces {
+-          network    = data.google_compute_network.existing_vpc.id
+-          subnetwork = data.google_compute_subnetwork.existing_subnet.id
++          network    = google_compute_network.vpc.id
++          subnetwork = google_compute_subnetwork.subnet.id
+         }
+         egress = "PRIVATE_RANGES_ONLY"
+       }
+@@ -65,7 +65,7 @@ resource "google_cloud_run_v2_job" "migrate_bap" {
+       containers {
+         name  = "cloudsql-proxy"
+         image = local.cloudsql_proxy_image
+-        args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", data.google_sql_database_instance.existing.connection_name]
++        args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", google_sql_database_instance.postgres.connection_name]
+ 
+         startup_probe {
+           tcp_socket {
+@@ -88,7 +88,7 @@ resource "google_cloud_run_v2_job" "migrate_bpp" {
+   name       = "migrate-bpp"
+   project    = var.project_id
+   location   = var.region
+-  depends_on = [google_project_service.apis, google_compute_shared_vpc_service_project.service, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor]
++  depends_on = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
+ 
+   template {
+     template {
+@@ -97,8 +97,8 @@ resource "google_cloud_run_v2_job" "migrate_bpp" {
+ 
+       vpc_access {
+         network_interfaces {
+-          network    = data.google_compute_network.existing_vpc.id
+-          subnetwork = data.google_compute_subnetwork.existing_subnet.id
++          network    = google_compute_network.vpc.id
++          subnetwork = google_compute_subnetwork.subnet.id
+         }
+         egress = "PRIVATE_RANGES_ONLY"
+       }
+@@ -139,7 +139,7 @@ resource "google_cloud_run_v2_job" "migrate_bpp" {
+       containers {
+         name  = "cloudsql-proxy"
+         image = local.cloudsql_proxy_image
+-        args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", data.google_sql_database_instance.existing.connection_name]
++        args  = ["--structured-logs", "--address=0.0.0.0", "--port=5432", "--private-ip", google_sql_database_instance.postgres.connection_name]
+ 
+         startup_probe {
+           tcp_socket {
+diff --git a/terraform/cloud-run-onix-bap.tf b/terraform/cloud-run-onix-bap.tf
+index 8a9d6e1..88485c7 100644
+--- a/terraform/cloud-run-onix-bap.tf
++++ b/terraform/cloud-run-onix-bap.tf
+@@ -8,7 +8,7 @@ resource "google_cloud_run_v2_service" "onix_bap" {
+   location            = var.region
+   ingress             = "INGRESS_TRAFFIC_ALL"
+   deletion_protection = false
+-  depends_on          = [google_project_service.apis, google_compute_shared_vpc_service_project.service, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor]
++  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_redis_instance.redis]
+ 
+   template {
+     service_account = google_service_account.cloud_run_sa.email
+@@ -20,8 +20,8 @@ resource "google_cloud_run_v2_service" "onix_bap" {
+ 
+     vpc_access {
+       network_interfaces {
+-        network    = data.google_compute_network.existing_vpc.id
+-        subnetwork = data.google_compute_subnetwork.existing_subnet.id
++        network    = google_compute_network.vpc.id
++        subnetwork = google_compute_subnetwork.subnet.id
+       }
+       egress = "PRIVATE_RANGES_ONLY"
+     }
+@@ -43,7 +43,7 @@ resource "google_cloud_run_v2_service" "onix_bap" {
+ 
+       env {
+         name  = "REDIS_ADDR"
+-        value = "${data.google_redis_instance.existing.host}:${data.google_redis_instance.existing.port}"
++        value = "${google_redis_instance.redis.host}:${google_redis_instance.redis.port}"
+       }
+       env {
+         name  = "NETWORK_PARTICIPANT"
+diff --git a/terraform/cloud-run-onix-bpp.tf b/terraform/cloud-run-onix-bpp.tf
+index fcf9ba6..11908e9 100644
+--- a/terraform/cloud-run-onix-bpp.tf
++++ b/terraform/cloud-run-onix-bpp.tf
+@@ -7,7 +7,7 @@ resource "google_cloud_run_v2_service" "onix_bpp" {
+   location            = var.region
+   ingress             = "INGRESS_TRAFFIC_ALL"
+   deletion_protection = false
+-  depends_on          = [google_project_service.apis, google_compute_shared_vpc_service_project.service, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor]
++  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_redis_instance.redis]
+ 
+   template {
+     service_account = google_service_account.cloud_run_sa.email
+@@ -19,8 +19,8 @@ resource "google_cloud_run_v2_service" "onix_bpp" {
+ 
+     vpc_access {
+       network_interfaces {
+-        network    = data.google_compute_network.existing_vpc.id
+-        subnetwork = data.google_compute_subnetwork.existing_subnet.id
++        network    = google_compute_network.vpc.id
++        subnetwork = google_compute_subnetwork.subnet.id
+       }
+       egress = "PRIVATE_RANGES_ONLY"
+     }
+@@ -42,7 +42,7 @@ resource "google_cloud_run_v2_service" "onix_bpp" {
+ 
+       env {
+         name  = "REDIS_ADDR"
+-        value = "${data.google_redis_instance.existing.host}:${data.google_redis_instance.existing.port}"
++        value = "${google_redis_instance.redis.host}:${google_redis_instance.redis.port}"
+       }
+       env {
+         name  = "NETWORK_PARTICIPANT"
+diff --git a/terraform/network.tf b/terraform/network.tf
+index 576e7f2..e152211 100644
+--- a/terraform/network.tf
++++ b/terraform/network.tf
+@@ -1,43 +1,36 @@
+-# Reuses remiges-ion's existing VPC/subnet — does NOT create a new network.
+-# Cloud Run in remiges-trade needs Direct VPC Egress into this network to
+-# reach both the existing Cloud SQL instance (private IP) and the existing
+-# Memorystore instance (which has no public-IP option at all), so
+-# remiges-trade must be attached to it via Shared VPC.
++# Owned VPC/subnet for Direct VPC Egress — Cloud Run needs this to reach the
++# private-IP Cloud SQL instance and the Memorystore instance (which has no
++# public-IP option at all). Single project, so no Shared VPC is needed.
+ 
+-data "google_compute_network" "existing_vpc" {
+-  provider = google.remiges_ion
+-  name     = var.vpc_name
+-  project  = var.remiges_ion_project_id
++resource "google_compute_network" "vpc" {
++  name                    = var.vpc_name
++  project                 = var.project_id
++  auto_create_subnetworks = false
++  depends_on              = [google_project_service.apis]
+ }
+ 
+-data "google_compute_subnetwork" "existing_subnet" {
+-  provider = google.remiges_ion
+-  name     = var.subnet_name
+-  region   = var.region
+-  project  = var.remiges_ion_project_id
++resource "google_compute_subnetwork" "subnet" {
++  name          = var.subnet_name
++  project       = var.project_id
++  region        = var.region
++  network       = google_compute_network.vpc.id
++  ip_cidr_range = var.subnet_cidr
+ }
+ 
+-# Makes remiges-ion a Shared VPC host project. Requires Shared VPC Admin
+-# rights (roles/compute.xpnAdmin) at the ORG or FOLDER level to apply — plain
+-# project Owner on remiges-ion is not always sufficient. Does not disrupt any
+-# existing resource in remiges-ion; it only enables attaching service
+-# projects.
+-resource "google_compute_shared_vpc_host_project" "host" {
+-  provider = google.remiges_ion
+-  project  = var.remiges_ion_project_id
++# Reserved IP range + peering connection required before a Cloud SQL instance
++# can use a private IP in this VPC (Private Services Access).
++resource "google_compute_global_address" "psa_range" {
++  name          = "beckn-app-psa-range"
++  project       = var.project_id
++  purpose       = "VPC_PEERING"
++  address_type  = "INTERNAL"
++  prefix_length = var.psa_prefix_length
++  network       = google_compute_network.vpc.id
+ }
+ 
+-# Attaches remiges-trade as a service project under that host. Requires
+-# compute.googleapis.com enabled in remiges-trade first (the attach call
+-# fails against a project where Compute Engine API isn't on yet), and that
+-# isn't otherwise inferrable from any attribute this resource reads.
+-resource "google_compute_shared_vpc_service_project" "service" {
+-  provider        = google.remiges_ion
+-  host_project    = var.remiges_ion_project_id
+-  service_project = var.project_id
+-
+-  depends_on = [
+-    google_compute_shared_vpc_host_project.host,
+-    google_project_service.apis,
+-  ]
++resource "google_service_networking_connection" "psa" {
++  network                 = google_compute_network.vpc.id
++  service                 = "servicenetworking.googleapis.com"
++  reserved_peering_ranges = [google_compute_global_address.psa_range.name]
++  depends_on              = [google_project_service.apis]
+ }
+diff --git a/terraform/outputs.tf b/terraform/outputs.tf
+index 1d5600f..64baef3 100644
+--- a/terraform/outputs.tf
++++ b/terraform/outputs.tf
+@@ -30,9 +30,17 @@ output "artifact_registry_repo" {
+ }
+ 
+ output "cloud_sql_connection_name" {
+-  value = data.google_sql_database_instance.existing.connection_name
++  value = google_sql_database_instance.postgres.connection_name
+ }
+ 
+ output "redis_host" {
+-  value = data.google_redis_instance.existing.host
++  value = google_redis_instance.redis.host
++}
++
++output "vpc_name" {
++  value = google_compute_network.vpc.name
++}
++
++output "subnet_name" {
++  value = google_compute_subnetwork.subnet.name
+ }
+diff --git a/terraform/providers.tf b/terraform/providers.tf
+index 32a45f2..3976cde 100644
+--- a/terraform/providers.tf
++++ b/terraform/providers.tf
+@@ -1,30 +1,19 @@
+-# Default provider — everything this module actually CREATES (Cloud Run,
+-# Artifact Registry, Secret Manager, service accounts) lives in remiges-trade.
++# Single project — everything this module creates (Cloud Run, Artifact
++# Registry, Secret Manager, service accounts, VPC, Cloud SQL, Redis) lives in
++# var.project_id. No cross-project reuse, no aliased provider needed.
+ provider "google" {
+   project = var.project_id
+   region  = var.region
+ }
+ 
+-# Aliased provider — used only for the handful of things that must reference
+-# or modify remiges-ion: the existing Cloud SQL instance, the existing
+-# Memorystore instance, the existing VPC/subnet, Shared VPC host/service
+-# project attachment, and the cross-project IAM grants those require.
+-provider "google" {
+-  alias   = "remiges_ion"
+-  project = var.remiges_ion_project_id
+-  region  = var.region
+-}
+-
+ locals {
+-  # APIs needed in remiges-trade. sqladmin IS needed here even though no SQL
+-  # instance is created in this project — the Cloud SQL Auth Proxy sidecar
+-  # (bap/bpp/migrate jobs) calls the Cloud SQL Admin API using remiges-trade's
+-  # own service account/quota context to resolve the (remiges-ion-owned)
+-  # instance's connection metadata, so it must be enabled on the CALLING
+-  # project, not just wherever the instance lives. Confirmed by a real
+-  # deploy failure: "Cloud SQL Admin API has not been used in project
+-  # <remiges-trade-number> before or it is disabled." redis/servicenetworking
+-  # remain excluded — nothing in this project talks to those APIs directly.
++  # sqladmin is needed even though the Cloud SQL instance is created by this
++  # same module — the Cloud SQL Auth Proxy sidecar (bap/bpp/migrate jobs)
++  # calls the Cloud SQL Admin API using this project's own service
++  # account/quota context to resolve the instance's connection metadata.
++  # servicenetworking is needed for the Private Services Access peering
++  # (see network.tf) that Cloud SQL's private IP requires. redis is needed
++  # to create the Memorystore instance (see redis.tf).
+   required_apis = [
+     "run.googleapis.com",
+     "artifactregistry.googleapis.com",
+@@ -32,6 +21,8 @@ locals {
+     "iam.googleapis.com",
+     "compute.googleapis.com",
+     "sqladmin.googleapis.com",
++    "servicenetworking.googleapis.com",
++    "redis.googleapis.com",
+   ]
+ }
+ 
+diff --git a/terraform/redis.tf b/terraform/redis.tf
+index beb3804..d5d82a0 100644
+--- a/terraform/redis.tf
++++ b/terraform/redis.tf
+@@ -1,13 +1,18 @@
+-# Reuses remiges-ion's existing Memorystore instance — data source only, no
+-# new instance created. onix-bap and onix-bpp will both point their
+-# REDIS_ADDR at this same instance, same as the insurance app's own onix
+-# adapters already do; cache keys are namespaced by transaction/message UUID
+-# so collision risk across the two apps sharing one keyspace is low, but not
+-# zero.
++# New Memorystore Redis instance, owned by this project. Dedicated to this
++# app — no cross-tenant cache-collision risk (unlike the old reused-instance
++# setup). onix-bap and onix-bpp both point their REDIS_ADDR at this instance.
+ 
+-data "google_redis_instance" "existing" {
+-  provider = google.remiges_ion
+-  name     = var.redis_instance_name
+-  region   = var.region
+-  project  = var.remiges_ion_project_id
++resource "google_redis_instance" "redis" {
++  name           = var.redis_instance_name
++  project        = var.project_id
++  region         = var.region
++  tier           = var.redis_tier
++  memory_size_gb = var.redis_memory_size_gb
++  redis_version  = "REDIS_7_0"
++
++  authorized_network = google_compute_network.vpc.id
++  connect_mode       = "DIRECT_PEERING"
++  reserved_ip_range  = var.redis_reserved_ip_range
++
++  depends_on = [google_project_service.apis]
+ }
+diff --git a/terraform/service-accounts.tf b/terraform/service-accounts.tf
+index 15d8a4c..2075263 100644
+--- a/terraform/service-accounts.tf
++++ b/terraform/service-accounts.tf
+@@ -6,7 +6,7 @@ resource "google_service_account" "cloud_run_sa" {
+ 
+ # Needed to construct the Cloud Run Service Agent's identity below
+ # (service-<PROJECT_NUMBER>@serverless-robot-prod.iam.gserviceaccount.com).
+-data "google_project" "trade" {
++data "google_project" "this" {
+   project_id = var.project_id
+ }
+ 
+@@ -16,31 +16,28 @@ resource "google_project_iam_member" "artifact_reader" {
+   member  = "serviceAccount:${google_service_account.cloud_run_sa.email}"
+ }
+ 
+-# Cross-project — the grant has to live in the project that owns the Cloud
+-# SQL instance (remiges-ion), not in remiges-trade.
+ resource "google_project_iam_member" "cloud_sql_client" {
+-  provider = google.remiges_ion
+-  project  = var.remiges_ion_project_id
+-  role     = "roles/cloudsql.client"
+-  member   = "serviceAccount:${google_service_account.cloud_run_sa.email}"
++  project = var.project_id
++  role    = "roles/cloudsql.client"
++  member  = "serviceAccount:${google_service_account.cloud_run_sa.email}"
+ }
+ 
+-# Grants Direct VPC Egress rights scoped to just the one existing subnet
+-# being shared (not project-wide network access in remiges-ion).
++# Grants Direct VPC Egress rights scoped to just the one subnet Cloud Run
++# uses.
+ #
+-# IMPORTANT: this must go to the Cloud Run SERVICE AGENT
+-# (service-<PROJECT_NUMBER>@serverless-robot-prod.iam.gserviceaccount.com),
+-# not the workload runtime service account (cloud_run_sa) — Direct VPC
+-# Egress attachment to a Shared VPC subnet is performed by the platform's own
+-# service agent, not the container's runtime identity. Confirmed against
+-# https://docs.cloud.google.com/run/docs/configuring/shared-vpc-direct-vpc.
++# Google's Direct VPC Egress docs tie the requirement to grant this to the
++# Cloud Run SERVICE AGENT (service-<PROJECT_NUMBER>@serverless-robot-prod.iam.gserviceaccount.com),
++# rather than the workload runtime service account, specifically to the
++# Shared VPC case. This is now a single-project VPC, so it may not be
++# strictly required — kept anyway as a precaution since it's a harmless,
++# idempotent grant either way. Worth checking empirically on first apply:
++# if Direct VPC Egress works without it, it can be removed later.
+ resource "google_compute_subnetwork_iam_member" "network_user" {
+-  provider   = google.remiges_ion
+-  project    = var.remiges_ion_project_id
++  project    = var.project_id
+   region     = var.region
+-  subnetwork = data.google_compute_subnetwork.existing_subnet.name
++  subnetwork = google_compute_subnetwork.subnet.name
+   role       = "roles/compute.networkUser"
+-  member     = "serviceAccount:service-${data.google_project.trade.number}@serverless-robot-prod.iam.gserviceaccount.com"
++  member     = "serviceAccount:service-${data.google_project.this.number}@serverless-robot-prod.iam.gserviceaccount.com"
+ 
+   depends_on = [google_project_service.apis]
+ }
+diff --git a/terraform/sql.tf b/terraform/sql.tf
+index c693464..26cff7e 100644
+--- a/terraform/sql.tf
++++ b/terraform/sql.tf
+@@ -1,26 +1,43 @@
+-# Reuses remiges-ion's existing Cloud SQL instance — does NOT create a new
+-# instance. Only new databases + a new user are created on it, namespaced to
+-# this app so they don't collide with the insurance app's insurance_bap/
+-# insurance_bpp databases already on the same instance.
+-
+-data "google_sql_database_instance" "existing" {
+-  provider = google.remiges_ion
+-  name     = var.sql_instance_name
+-  project  = var.remiges_ion_project_id
++# New Cloud SQL Postgres instance, owned by this project — see variables.tf
++# for sizing (sql_tier etc, sandbox-appropriate defaults).
++
++resource "google_sql_database_instance" "postgres" {
++  name                = var.sql_instance_name
++  project             = var.project_id
++  region              = var.region
++  database_version    = "POSTGRES_15"
++  deletion_protection = false
++
++  settings {
++    tier              = var.sql_tier
++    availability_type = var.sql_availability_type
++    disk_type         = var.sql_disk_type
++    disk_size         = var.sql_disk_size_gb
++
++    ip_configuration {
++      ipv4_enabled                                  = false
++      private_network                               = google_compute_network.vpc.id
++      enable_private_path_for_google_cloud_services = true
++    }
++
++    backup_configuration {
++      enabled = var.sql_backup_enabled
++    }
++  }
++
++  depends_on = [google_service_networking_connection.psa]
+ }
+ 
+ resource "google_sql_database" "trade_bap" {
+-  provider = google.remiges_ion
+   name     = var.db_name_bap
+-  project  = var.remiges_ion_project_id
+-  instance = data.google_sql_database_instance.existing.name
++  project  = var.project_id
++  instance = google_sql_database_instance.postgres.name
+ }
+ 
+ resource "google_sql_database" "trade_bpp" {
+-  provider = google.remiges_ion
+   name     = var.db_name_bpp
+-  project  = var.remiges_ion_project_id
+-  instance = data.google_sql_database_instance.existing.name
++  project  = var.project_id
++  instance = google_sql_database_instance.postgres.name
+ }
+ 
+ resource "random_password" "postgres" {
+@@ -29,9 +46,8 @@ resource "random_password" "postgres" {
+ }
+ 
+ resource "google_sql_user" "trade" {
+-  provider = google.remiges_ion
+   name     = var.db_user
+-  project  = var.remiges_ion_project_id
+-  instance = data.google_sql_database_instance.existing.name
++  project  = var.project_id
++  instance = google_sql_database_instance.postgres.name
+   password = random_password.postgres.result
+ }
+diff --git a/terraform/variables.tf b/terraform/variables.tf
+index ef709da..c119b38 100644
+--- a/terraform/variables.tf
++++ b/terraform/variables.tf
+@@ -1,17 +1,11 @@
+ variable "project_id" {
+-  description = "GCP project ID to deploy Cloud Run/Artifact Registry/Secret Manager into."
++  description = "GCP project ID to deploy everything into (Cloud Run, Artifact Registry, Secret Manager, VPC, Cloud SQL, Redis)."
+   type        = string
+-  default     = "remiges-trade"
+-}
+-
+-variable "remiges_ion_project_id" {
+-  description = "GCP project ID that owns the existing Cloud SQL instance, Memorystore instance, and VPC being reused."
+-  type        = string
+-  default     = "remiges-ion"
++  default     = "ion-sandbox-001"
+ }
+ 
+ variable "region" {
+-  description = "GCP region for all resources. Must match the region the existing Cloud SQL/Redis/VPC live in for Shared VPC + Direct VPC Egress to work."
++  description = "GCP region for all resources."
+   type        = string
+   default     = "asia-southeast2"
+ }
+@@ -23,38 +17,100 @@ variable "image_tag" {
+ }
+ 
+ variable "artifact_registry_repo_id" {
+-  description = "Artifact Registry Docker repository ID (created in remiges-trade)."
++  description = "Artifact Registry Docker repository ID."
+   type        = string
+   default     = "beckn-app"
+ }
+ 
+-# --- Existing remiges-ion resources being reused (not created here) ---
++# --- New VPC/subnet for Direct VPC Egress (bap/bpp/onix-bap/onix-bpp/migrate jobs) ---
++
++variable "vpc_name" {
++  description = "Name of the VPC network this module creates."
++  type        = string
++  default     = "beckn-app-vpc"
++}
++
++variable "subnet_name" {
++  description = "Name of the subnetwork this module creates (within vpc_name)."
++  type        = string
++  default     = "beckn-app-subnet"
++}
++
++variable "subnet_cidr" {
++  description = "CIDR range for the subnetwork. Must not overlap psa_prefix_length's auto-selected range or redis_reserved_ip_range."
++  type        = string
++  default     = "10.10.0.0/24"
++}
++
++variable "psa_prefix_length" {
++  description = "Prefix length of the IP range reserved for Private Services Access (Cloud SQL private IP peering). Google auto-selects a non-overlapping range of this size within the VPC."
++  type        = number
++  default     = 20
++}
++
++# --- New Cloud SQL instance ---
+ 
+ variable "sql_instance_name" {
+-  description = "Name of the existing Cloud SQL instance in remiges-ion to reuse."
++  description = "Name of the Cloud SQL Postgres instance this module creates."
++  type        = string
++  default     = "beckn-app-postgres"
++}
++
++variable "sql_tier" {
++  description = "Cloud SQL machine tier. db-f1-micro/db-g1-small are MySQL-only and rejected for Postgres — db-custom-1-3840 (1 vCPU/3.75GB) is the cheapest valid Postgres tier."
+   type        = string
+-  default     = "insurance-postgres"
++  default     = "db-custom-1-3840"
+ }
+ 
++variable "sql_disk_size_gb" {
++  type    = number
++  default = 10
++}
++
++variable "sql_disk_type" {
++  description = "PD_HDD is cheaper than PD_SSD; fine for a sandbox workload."
++  type        = string
++  default     = "PD_HDD"
++}
++
++variable "sql_availability_type" {
++  description = "ZONAL (no HA, cheaper) or REGIONAL. Sandbox default is ZONAL."
++  type        = string
++  default     = "ZONAL"
++}
++
++variable "sql_backup_enabled" {
++  description = "Whether automated backups are enabled. Off by default for a sandbox — flip on if you care about not losing data."
++  type        = bool
++  default     = false
++}
++
++# --- New Memorystore Redis instance ---
++
+ variable "redis_instance_name" {
+-  description = "Name of the existing Memorystore instance in remiges-ion to reuse."
++  description = "Name of the Memorystore Redis instance this module creates."
+   type        = string
+-  default     = "insurance-redis"
++  default     = "beckn-app-redis"
+ }
+ 
+-variable "vpc_name" {
+-  description = "Name of the existing VPC network in remiges-ion to share via Shared VPC."
++variable "redis_tier" {
++  description = "BASIC (no HA/failover, cheapest) or STANDARD_HA."
+   type        = string
+-  default     = "insurance-app-vpc"
++  default     = "BASIC"
+ }
+ 
+-variable "subnet_name" {
+-  description = "Name of the existing subnetwork in remiges-ion (within vpc_name) to grant remiges-trade's Cloud Run service account network-user access to."
++variable "redis_memory_size_gb" {
++  type    = number
++  default = 1
++}
++
++variable "redis_reserved_ip_range" {
++  description = "CIDR reserved for Memorystore's direct peering. Must not overlap subnet_cidr or the PSA range."
+   type        = string
+-  default     = "insurance-app-subnet"
++  default     = "10.20.0.0/29"
+ }
+ 
+-# --- New databases/user on the existing Cloud SQL instance ---
++# --- New databases/user on the new Cloud SQL instance ---
+ 
+ variable "db_name_bap" {
+   type    = string
+@@ -77,34 +133,30 @@ variable "db_user" {
+ # networkParticipant. These two uses MUST always match — onix signs a
+ # message using the keyset registered for whatever subscriber_id the message
+ # itself claims to be from, so any mismatch here fails signing with "keyset
+-# not found" (hit this for real: bap_id stayed at the old baptest1.remiges.tech
+-# identity while the onix keyManager was updated to a new one, and every
+-# outbound select/init/confirm broke). Previously two separate variables;
+-# consolidated to one after that incident so they can't drift again.
++# not found". No default on purpose: this deployment uses a separate
++# registered identity from local dev / other deployments, and leaving a
++# hardcoded default around is exactly how that kind of drift happens
++# silently. terraform plan fails loudly until terraform.tfvars supplies a
++# real value.
+ 
+ variable "bap_id" {
+-  type    = string
+-  default = "onix-bap-x7m2wmy7nq-et.a.run.app"
++  type = string
+ }
+ 
+ variable "bpp_id" {
+-  type    = string
+-  default = "onix-bpp-x7m2wmy7nq-et.a.run.app"
++  type = string
+ }
+ 
+ variable "network_id" {
+-  type    = string
+-  default = "ion.id/ion-launch"
++  type = string
+ }
+ 
+ variable "cds_discover_url" {
+-  type    = string
+-  default = "https://34.47.138.217.sslip.io/beckn/discover"
++  type = string
+ }
+ 
+ variable "cds_publish_url" {
+-  type    = string
+-  default = "https://fabric.nfh.global/beckn/catalog/publish"
++  type = string
+ }
+ 
+ # --- Secrets ---

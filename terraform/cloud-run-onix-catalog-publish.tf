@@ -1,8 +1,15 @@
-# NOTE: onix-bpp <-> bpp is a mutual reference — see cloud-run-wiring.tf,
-# which patches BPP_URL once every service's URL is known.
+# DS-internal, same-operator service: bpp forwards signed catalog/publish
+# requests here (see cloud-run-bpp.tf's CDS_PUBLISH_URL). Reuses onix-bpp's
+# registered identity (bpp-onix-* secrets) — no separate identity, nothing
+# new to seed via scripts/seed-secrets.sh. Unlike bap<->onix-bap and
+# bpp<->onix-bpp, this is one-directional (bpp depends on this service, not
+# the reverse), so it needs no cloud-run-wiring.tf placeholder-patch step.
+#
+# outputRoot (/beckn) is plain container-local storage — ephemeral, lost on
+# restart/scale-to-zero. Deliberate for now; see README.md.
 
-resource "google_cloud_run_v2_service" "onix_bpp" {
-  name                = "onix-bpp"
+resource "google_cloud_run_v2_service" "onix_catalog_publish" {
+  name                = "onix-catalog-publish"
   project             = var.project_id
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
@@ -26,11 +33,11 @@ resource "google_cloud_run_v2_service" "onix_bpp" {
     }
 
     containers {
-      name  = "onix-bpp"
-      image = local.images.onix_bpp
+      name  = "onix-catalog-publish"
+      image = local.images.onix_catalog_publish
 
       ports {
-        container_port = 8082
+        container_port = 8085
       }
 
       resources {
@@ -92,17 +99,6 @@ resource "google_cloud_run_v2_service" "onix_bpp" {
             version = "latest"
           }
         }
-      }
-      # Bootstrap placeholder, patched to the real value post-apply by
-      # cloud-run-wiring.tf. NOT blank: if left empty, entrypoint.sh's
-      # envsubst would render local-simple-routing-BPPReceiver.yaml's target
-      # url as the scheme-less, host-less string "/api/webhook" — whether the
-      # vendor onix binary eagerly validates/rejects that at startup (versus
-      # only when routing a request) is unverified from outside the image,
-      # so use a syntactically-valid placeholder rather than risk it.
-      env {
-        name  = "BPP_URL"
-        value = "https://placeholder.invalid"
       }
     }
   }

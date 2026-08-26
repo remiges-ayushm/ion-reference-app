@@ -24,15 +24,27 @@ output "onix_bpp_url" {
   value = google_cloud_run_v2_service.onix_bpp.uri
 }
 
+output "onix_catalog_publish_url" {
+  value = google_cloud_run_v2_service.onix_catalog_publish.uri
+}
+
 output "artifact_registry_repo" {
   value       = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_registry_repo_id}"
   description = "Push images here — see scripts/build-and-push.sh."
 }
 
 output "cloud_sql_connection_name" {
-  value = data.google_sql_database_instance.existing.connection_name
+  value = google_sql_database_instance.postgres.connection_name
 }
 
 output "redis_host" {
-  value = data.google_redis_instance.existing.host
+  value = google_redis_instance.redis.host
+}
+
+output "vpc_name" {
+  value = google_compute_network.vpc.name
+}
+
+output "subnet_name" {
+  value = google_compute_subnetwork.subnet.name
 }

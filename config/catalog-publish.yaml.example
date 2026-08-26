@@ -1,0 +1,93 @@
+appName: "onix-catalog-publish"
+log:
+  level: debug
+  destinations:
+    - type: stdout
+  contextKeys:
+    - transaction_id
+    - message_id
+    - subscriber_id
+    - module_id
+http:
+  port: 8085
+  timeout:
+    read: 30
+    write: 30
+    idle: 30
+pluginManager:
+  root: ./plugins
+modules:
+  # ─────────────────────────────────────────────────────────────────
+  # catalog/publish — DS-internal trigger for the catalog-publisher
+  # plugin. Unsigned, same-operator call (not a network-facing Beckn
+  # action): no validateSign/addRoute/signAck. Given one or more plain
+  # Beckn Catalog objects, it diffs against what was last published
+  # (baseline vs. incremental change file), signs the result, and
+  # writes it under outputRoot.
+  # Listens at: http://localhost:8085/catalog/publish
+  # See beckn-onix's pkg/plugin/implementation/catalogpublisher/README.md
+  # ─────────────────────────────────────────────────────────────────
+  - name: catalogPublish
+    path: /catalog/publish
+    handler:
+      type: catalogPublish
+      role: bpp
+      outputRoot: /beckn
+      httpClientConfig:
+        maxIdleConns: 1000
+        maxIdleConnsPerHost: 200
+        idleConnTimeout: 300s
+        responseHeaderTimeout: 5s
+      plugins:
+        # registry+cache exist only to satisfy keyManager's constructor
+        # (KeyManagerProvider.New always requires a RegistryLookup); the
+        # publisher itself never calls either.
+        registry:
+          id: dediregistry
+          config:
+            url: https://fabric.nfh.global/registry/dedi
+            timeout: 10
+            retry_max: 3
+            retry_wait_min: 100ms
+            retry_wait_max: 500ms
+        cache:
+          id: cache
+          config:
+            addr: redis-bpp:6379
+        # Same registered identity/keypair as onix-bpp
+        # (config/local-simple-bpp.yaml) — one operator, one key.
+        # NOTE: if the container fails config validation on startup,
+        # this field may need to be `networkParticipant` instead of
+        # `subscriberId` — check `docker logs onix-catalog-publish`.
+        keyManager:
+          id: simplekeymanager
+          config:
+            subscriberId: REPLACE_WITH_YOUR_SUBSCRIBER_ID
+            keyId: REPLACE_WITH_YOUR_KEY_ID
+            signingPrivateKey: REPLACE_WITH_YOUR_SIGNING_PRIVATE_KEY
+            signingPublicKey: REPLACE_WITH_YOUR_SIGNING_PUBLIC_KEY
+            encrPrivateKey: REPLACE_WITH_YOUR_ENCR_PRIVATE_KEY
+            encrPublicKey: REPLACE_WITH_YOUR_ENCR_PUBLIC_KEY
+        catalogPublisher:
+          id: catalogpublisher
+          config:
+            # subscriberId derives from keyManager.config above.
+            nextUpdateIn: "336h"
+            # Public URL prefix outputRoot is served under. No reverse
+            # proxy serves this folder publicly yet -- update this once
+            # you expose data/beckn/ over HTTP.
+            catalogBaseURL: "https://REPLACE_WITH_YOUR_PUBLIC_CATALOG_DOMAIN"
+            # Read-only, warn-only: checks whether this node's DeDi registry
+            # record links this catalog index via meta.catalog_index_urls.
+            checkCatalogIndexLink: "true"
+            # publishLatest: maintains a full, overwritten-in-place "latest"
+            # CatalogFile alongside baseline/changes[]. gzip: serves every
+            # catalog file gzip-compressed (.json.gz).
+            publishLatest: "true"
+            gzip: "true"
+        # Validates submitted catalogs before they're published against
+        # catalog/publish's real schema (protocol-specifications-v2 beckn.yaml).
+        schemaValidator:
+          id: schemav2validator
+          config:
+            cacheTTL: "3600"

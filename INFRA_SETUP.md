@@ -25,8 +25,9 @@ independent tracks:
 | `onix-bpp` | Beckn network adapter for bpp | 8082 | `onix-bpp/` |
 
 Plus Postgres and two Redis instances, all defined in `docker-compose.yml`
-for local dev (in the cloud, these are *reused* from an existing project's
-Cloud SQL/Memorystore — see the cloud section).
+for local dev (in the cloud, these are a dedicated Cloud SQL instance and a
+dedicated Memorystore instance created in the same project — see the cloud
+section).
 
 ## 1. Local development (Docker Compose)
 
@@ -109,24 +110,34 @@ to the *old* container IP and you'll get `502 Bad Gateway`. Either
 ## 2. Cloud deployment (Cloud Run)
 
 Full step-by-step is in [`terraform/README.md`](terraform/README.md) —
-including the org/IAM prerequisites, the exact bootstrap command sequence,
-and 11 specific, real gotchas encountered getting this working (not
-hypothetical ones). Condensed version:
+including the exact bootstrap command sequence and the specific, real
+gotchas encountered getting this working (not hypothetical ones). Condensed
+version:
 
-1. Own (or get access to) a GCP project to deploy into, and — if you're
-   reusing an existing Cloud SQL/Memorystore from a *different* project like
-   this deployment does — confirm that other project belongs to a GCP
-   organization (Shared VPC requires it) and you can get
-   `roles/compute.xpnAdmin` granted at the org level, at least temporarily.
+1. Own (or get access to) a GCP project to deploy into, with a billing
+   account linked. Everything — Cloud Run, a new Cloud SQL Postgres
+   instance, a new Memorystore Redis instance, VPC/subnet — lives in this
+   one project. No second project, no Shared VPC.
 2. Create the Terraform state bucket, `terraform.tfvars` with your project
-   ID, and bootstrap APIs + Artifact Registry + empty secret containers.
+   ID and network identity values (`bap_id`/`bpp_id`/`network_id`/
+   `cds_discover_url` — no defaults exist for these, by design), and
+   bootstrap APIs + Artifact Registry + empty secret containers. (There's no
+   `cds_publish_url` to supply — `bpp`'s `CDS_PUBLISH_URL` points at the
+   `onix-catalog-publish` Cloud Run service Terraform deploys itself, a
+   same-project service, not an external registry endpoint.)
 3. Seed secrets — same identity/key material as local dev's `.env` and
-   `config/local-simple-{bap,bpp}.yaml`, if you want cloud and local to
-   represent the same registered participant (recommended, see below).
-4. Build and push all 8 images (6 services + 2 migrate-job images).
-5. Set up Shared VPC, then apply everything else. The very first full apply
-   will fail on `bap`/`bpp` — that's expected, run the migrate jobs and
-   apply again (see `terraform/README.md`'s bootstrap sequence for why).
+   `config/local-simple-{bap,bpp}.yaml` if you want cloud and local to
+   represent the same registered participant, or a separate registered
+   identity if this deployment is meant to be a distinct participant
+   (recommended for a personal sandbox — keeps it isolated from any other
+   deployment's identity).
+4. Build and push all 9 images (6 services + `onix-catalog-publish` + 2
+   migrate-job images).
+5. Create the VPC/subnet, Private Services Access peering, Cloud SQL
+   instance, and Redis instance (Cloud SQL creation is slow — budget 5-10
+   minutes), then apply everything else. The very first full apply will
+   fail on `bap`/`bpp` — that's expected, run the migrate jobs and apply
+   again (see `terraform/README.md`'s bootstrap sequence for why).
 
 ## 3. Keeping local and cloud in sync
 
@@ -139,12 +150,18 @@ subscriber-identity-mismatch errors:
 |---|---|---|
 | App-level signing key (`BAP_PRIVATE_KEY`/`BAP_KEY_ID`, `BPP_PRIVATE_KEY`/`BPP_KEY_ID`) | root `.env` | `bap-private-key`/`bap-key-id`/`bpp-private-key`/`bpp-key-id` secrets in Secret Manager |
 | Onix keyManager identity (`networkParticipant`, `keyId`, signing/encr keys) | `config/local-simple-{bap,bpp}.yaml` | `bap-onix-*`/`bpp-onix-*` secrets in Secret Manager |
-| Subscriber ID used in `context.bapId`/`bppId` | `docker-compose.yml`'s `BAP_ID`/`BPP_ID` | `terraform/variables.tf`'s `bap_id`/`bpp_id` |
-| Network ID | `docker-compose.yml`'s `NETWORK_ID` (+ both apps' `cmd/server/.env`) | `terraform/variables.tf`'s `network_id` |
+| Subscriber ID used in `context.bapId`/`bppId` | `docker-compose.yml`'s `BAP_ID`/`BPP_ID` | `terraform/terraform.tfvars`'s `bap_id`/`bpp_id` |
+| Network ID | `docker-compose.yml`'s `NETWORK_ID` (+ both apps' `cmd/server/.env`) | `terraform/terraform.tfvars`'s `network_id` |
 
 After any cloud secret update, the affected Cloud Run service needs a forced
 new revision to actually pick up the change — see `terraform/README.md`'s
-Gotcha #11.
+Gotcha #9.
+
+Note: by default this deployment's cloud identity is a *separate* registered
+participant from local dev's (see §2 above), not the same one — so "keeping
+in sync" here mainly matters within the cloud track itself (e.g. after
+rotating this deployment's own keys), not necessarily between local and
+cloud.
 
 ## 4. Known unresolved issue
 

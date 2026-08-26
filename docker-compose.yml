@@ -99,6 +99,37 @@ services:
       - ./schemas:/app/schemas
     command: [ "./server", "--config=/app/config/local-simple-bpp.yaml" ]
 
+  # ─── Catalog Publish (standalone) ─────────────────────────────────────────
+  # File-based catalog/publish onix container, isolated from onix-bpp's txn
+  # routes and from the Go `bpp` app's Postgres/CDS-forwarding publish route.
+  # Config + published output live under file-onboarding-and-catalog-publish/.
+  # See file-onboarding-and-catalog-publish/README.md.
+  #
+  #   Catalog publish (internal trigger): http://localhost:8085/catalog/publish
+  #
+  # NOT fidedocker/onix-adapter:latest -- that image lacks the catalogPublish
+  # handler type and fails startup with "invalid module : catalogPublish".
+  onix-catalog-publish:
+    image: fidedocker/catalog-publisher:latest
+    container_name: onix-catalog-publish
+    platform: linux/amd64
+    restart: unless-stopped
+    networks:
+      - beckn
+    ports:
+      - "8085:8085"
+    environment:
+      CONFIG_FILE: "/app/config/catalog-publish.yaml"
+      REDIS_ADDR: redis-bpp:6379
+    depends_on:
+      redis-bpp:
+        condition: service_healthy
+    volumes:
+      - ./config:/app/config
+      - ./schemas:/app/schemas
+      - ./file-onboarding-and-catalog-publish/data/beckn:/beckn
+    command: [ "./server", "--config=/app/config/catalog-publish.yaml" ]
+
   # ─── BPP Application ──────────────────────────────────────────────────────
   bpp:
     build:
@@ -134,7 +165,7 @@ services:
       # BppCallerURL is the ONIX BPP caller base URL used for outbound on_* callbacks.
       BPP_CALLER_URL: http://onix-bpp:8082/bpp/caller
 
-      CDS_PUBLISH_URL: "https://fabric.nfh.global/beckn/catalog/publish" # BPP → CDS catalog publish endpoint
+      CDS_PUBLISH_URL: "http://onix-catalog-publish:8085/catalog/publish" # BPP → onix-catalog-publish (local docker network)
 
       # Ed25519 signing key registered for onix-bpp-x7m2wmy7nq-et.a.run.app —
       # signs outbound requests to CDS_PUBLISH_URL, and is the SAME keypair as

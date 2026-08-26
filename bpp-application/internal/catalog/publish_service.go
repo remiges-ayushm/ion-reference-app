@@ -131,12 +131,14 @@ func (s *PublishService) forwardToCDS(ctx context.Context, txID uuid.UUID, req *
 	start := time.Now()
 	outboundMsgID := uuid.New()
 
-	cdsCatalogs := make([]CDSCatalog, len(req.Catalogs))
+	onixCatalogs := make([]OnixCatalog, len(req.Catalogs))
+	directives := make([]OnixPublishDirective, len(req.Catalogs))
 	for i, c := range req.Catalogs {
-		cdsCatalogs[i] = ToCDSCatalog(c)
+		onixCatalogs[i] = ToOnixCatalog(c, s.cfg.BppID, s.cfg.BppURI)
+		directives[i] = ToOnixPublishDirective(c)
 	}
 
-	becknReq := BecknPublishRequest{
+	becknReq := OnixPublishRequest{
 		Context: BecknContext{
 			Version:       "2.0.0",
 			Action:        "catalog/publish",
@@ -147,7 +149,7 @@ func (s *PublishService) forwardToCDS(ctx context.Context, txID uuid.UUID, req *
 			BppURI:        s.cfg.BppURI,
 			NetworkID:     s.cfg.NetworkID,
 		},
-		Message: BecknPublishMessage{Catalogs: cdsCatalogs},
+		Message: OnixPublishMessage{Catalogs: onixCatalogs, PublishDirectives: directives},
 	}
 
 	becknReqJSON, _ := json.Marshal(becknReq)
@@ -287,13 +289,17 @@ func upsertCatalog(ctx context.Context, q *dbsqlc.Queries, bppID, bppURI string,
 		DescriptorLongDesc:   strPtr(cat.Descriptor.LongDesc),
 		DescriptorDocs:       emptyJSONArray,
 		DescriptorMediaFiles: mediaJSON,
-		CatalogType:  catType,
+		CatalogType:          catType,
 		ValidityStart: parseTimestamp(func() string {
-			if cat.Validity != nil { return cat.Validity.StartDate }
+			if cat.Validity != nil {
+				return cat.Validity.StartDate
+			}
 			return ""
 		}()),
 		ValidityEnd: parseTimestamp(func() string {
-			if cat.Validity != nil { return cat.Validity.EndDate }
+			if cat.Validity != nil {
+				return cat.Validity.EndDate
+			}
 			return ""
 		}()),
 	})

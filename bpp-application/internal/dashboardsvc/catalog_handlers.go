@@ -519,19 +519,20 @@ func (h *Handler) HandlePublishCatalog(c *gin.Context) {
 		DescriptorLongDesc  *string
 		ProviderID          string
 		ProviderName        string
+		CatalogType         *string
 		ValidityStart       pgtype.Timestamptz
 		ValidityEnd         pgtype.Timestamptz
 	}
 	err := h.pool.QueryRow(ctx, `
 		SELECT c.descriptor_name, c.descriptor_short_desc, c.descriptor_long_desc,
-		       c.provider_id, COALESCE(p.descriptor_name, c.provider_id),
+		       c.provider_id, COALESCE(p.descriptor_name, c.provider_id), c.catalog_type,
 		       c.validity_start, c.validity_end
 		FROM catalogs c
 		LEFT JOIN providers p ON p.id = c.provider_id AND p.bpp_id = c.bpp_id
 		WHERE c.id = $1 AND c.bpp_id = $2 AND c.deleted_at IS NULL`,
 		catalogID, h.cfg.BppID,
 	).Scan(&cat.DescriptorName, &cat.DescriptorShortDesc, &cat.DescriptorLongDesc,
-		&cat.ProviderID, &cat.ProviderName, &cat.ValidityStart, &cat.ValidityEnd)
+		&cat.ProviderID, &cat.ProviderName, &cat.CatalogType, &cat.ValidityStart, &cat.ValidityEnd)
 	if err != nil {
 		c.JSON(http.StatusNotFound, gin.H{"error": "catalog not found"})
 		return
@@ -549,6 +550,9 @@ func (h *Handler) HandlePublishCatalog(c *gin.Context) {
 			ID:         cat.ProviderID,
 			Descriptor: catalog.Descriptor{Name: cat.ProviderName},
 		},
+	}
+	if cat.CatalogType != nil && *cat.CatalogType != "" {
+		becknCat.PublishDirectives = &catalog.PublishDirectives{CatalogType: *cat.CatalogType}
 	}
 	if cat.ValidityStart.Valid && cat.ValidityEnd.Valid {
 		becknCat.Validity = &catalog.TimePeriod{
@@ -677,19 +681,20 @@ func (h *Handler) HandlePublishCatalog(c *gin.Context) {
 	txID := uuid.New()
 	msgID := uuid.New()
 
-	becknReq := map[string]any{
-		"context": map[string]string{
-			"version":       "2.0.0",
-			"action":        "catalog/publish",
-			"timestamp":     time.Now().UTC().Format(time.RFC3339),
-			"transactionId": txID.String(),
-			"messageId":     msgID.String(),
-			"bppId":         h.cfg.BppID,
-			"bppUri":        h.cfg.BppURI,
-			"networkId":     h.cfg.NetworkID,
+	becknReq := catalog.OnixPublishRequest{
+		Context: catalog.BecknContext{
+			Version:       "2.0.0",
+			Action:        "catalog/publish",
+			Timestamp:     time.Now().UTC().Format(time.RFC3339),
+			TransactionID: txID.String(),
+			MessageID:     msgID.String(),
+			BppID:         h.cfg.BppID,
+			BppURI:        h.cfg.BppURI,
+			NetworkID:     h.cfg.NetworkID,
 		},
-		"message": map[string]any{
-			"catalogs": []catalog.CDSCatalog{catalog.ToCDSCatalog(becknCat)},
+		Message: catalog.OnixPublishMessage{
+			Catalogs:          []catalog.OnixCatalog{catalog.ToOnixCatalog(becknCat, h.cfg.BppID, h.cfg.BppURI)},
+			PublishDirectives: []catalog.OnixPublishDirective{catalog.ToOnixPublishDirective(becknCat)},
 		},
 	}
 

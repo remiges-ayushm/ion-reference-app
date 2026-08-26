@@ -4,7 +4,7 @@
 
 terraform {
   backend "gcs" {
-    bucket = "remiges-trade-tfstate"
+    bucket = "ion-sandbox-001-tfstate"
     prefix = "beckn-app"
   }
 }
