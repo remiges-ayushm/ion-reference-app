@@ -24,3 +24,15 @@ resource "google_cloud_run_v2_service_iam_member" "public_invoker" {
   role     = "roles/run.invoker"
   member   = "allUsers"
 }
+
+# dedi_static lives in a different region (asia-southeast1, hardcoded in
+# cloud-run-dedi-static.tf) than var.region — it can't share the single
+# `location = var.region` for_each block above, which assumes every entry is
+# in the same region.
+resource "google_cloud_run_v2_service_iam_member" "dedi_static_public_invoker" {
+  project  = var.project_id
+  location = "asia-southeast1"
+  name     = google_cloud_run_v2_service.dedi_static.name
+  role     = "roles/run.invoker"
+  member   = "allUsers"
+}

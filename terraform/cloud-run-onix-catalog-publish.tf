@@ -5,8 +5,10 @@
 # bpp<->onix-bpp, this is one-directional (bpp depends on this service, not
 # the reverse), so it needs no cloud-run-wiring.tf placeholder-patch step.
 #
-# outputRoot (/beckn) is plain container-local storage — ephemeral, lost on
-# restart/scale-to-zero. Deliberate for now; see README.md.
+# outputRoot (/beckn) is a GCS volume mount onto the dedi-static bucket
+# (gcs-dedi-static.tf) — every publish writes straight into the bucket that
+# dedi-static-server serves publicly. GCS volume mounts require the gen2
+# execution environment.
 
 resource "google_cloud_run_v2_service" "onix_catalog_publish" {
   name                = "onix-catalog-publish"
@@ -14,10 +16,11 @@ resource "google_cloud_run_v2_service" "onix_catalog_publish" {
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
-  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_redis_instance.redis]
+  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_redis_instance.redis, google_storage_bucket_iam_member.dedi_static_writer]
 
   template {
-    service_account = google_service_account.cloud_run_sa.email
+    service_account       = google_service_account.cloud_run_sa.email
+    execution_environment = "EXECUTION_ENVIRONMENT_GEN2"
 
     scaling {
       min_instance_count = 0
@@ -30,6 +33,14 @@ resource "google_cloud_run_v2_service" "onix_catalog_publish" {
         subnetwork = google_compute_subnetwork.subnet.id
       }
       egress = "PRIVATE_RANGES_ONLY"
+    }
+
+    volumes {
+      name = "dedi-static"
+      gcs {
+        bucket    = google_storage_bucket.dedi_static.name
+        read_only = false
+      }
     }
 
     containers {
@@ -45,6 +56,11 @@ resource "google_cloud_run_v2_service" "onix_catalog_publish" {
           cpu    = "1"
           memory = "512Mi"
         }
+      }
+
+      volume_mounts {
+        name       = "dedi-static"
+        mount_path = "/beckn"
       }
 
       env {

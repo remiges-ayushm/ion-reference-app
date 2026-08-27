@@ -160,6 +160,23 @@ variable "cds_discover_url" {
   type = string
 }
 
+# --- DeDi static-file custom domain ---
+# The domain must already be verified in Search Console under the account
+# that owns this project before google_cloud_run_domain_mapping will apply
+# successfully — see domain-mapping.tf.
+
+variable "dedi_domain" {
+  description = "Apex domain the DeDi discovery chain is served on (e.g. ayushmatha.in)."
+  type        = string
+  default     = "ion-ref-app.ayushmatha.in"
+}
+
+variable "dedi_domain_www" {
+  description = "www subdomain variant, mapped to the same dedi-static-server service."
+  type        = string
+  default     = "www.ion-ref-app.ayushmatha.in"
+}
+
 # --- Secrets ---
 # No variables here on purpose. Every secret value (Postgres password aside,
 # which Terraform generates itself) is created as an empty Secret Manager

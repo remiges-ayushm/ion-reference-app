@@ -129,7 +129,7 @@ URLs and the new instances' addresses.
    `BAP_ONIX_SIGNING_PRIVATE_KEY`/`BAP_ONIX_KEY_ID` — see the network identity
    note above.
 
-5. Build and push all 9 images:
+5. Build and push all 10 images:
    ```sh
    PROJECT_ID=ion-sandbox-001 REGION=asia-southeast2 ../scripts/build-and-push.sh
    ```
@@ -251,6 +251,15 @@ URLs and the new instances' addresses.
     project it may not be strictly necessary. Kept anyway since it's a
     harmless, idempotent grant — worth checking empirically on first apply
     whether it can be removed.
+13. **Adding a new `google_cloud_run_v2_service` to an already-running
+    deployment fails with `Image '...' not found`** unless its image was
+    built and pushed first. On a fresh deploy this never bites, since step 5
+    above builds every image before the first full apply — it only shows up
+    when a new service is added later, one at a time, with no "build all
+    images" checkpoint to fall back on. Build and push that one image
+    (`docker build`/`docker push` directly, or a full `build-and-push.sh`
+    run) before applying it. Hit this adding `onix-catalog-publish` and
+    `dedi-static-server`.
 
 ## Verification
 

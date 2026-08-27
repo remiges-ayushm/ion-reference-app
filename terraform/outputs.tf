@@ -28,6 +28,25 @@ output "onix_catalog_publish_url" {
   value = google_cloud_run_v2_service.onix_catalog_publish.uri
 }
 
+output "dedi_static_bucket" {
+  value       = google_storage_bucket.dedi_static.name
+  description = "Upload the rarely-changing bootstrap files here directly, e.g.: gsutil cp dedi.index.json gs://<this>/.well-known/dedi.index.json"
+}
+
+output "dedi_static_server_url" {
+  value = google_cloud_run_v2_service.dedi_static.uri
+}
+
+output "dedi_domain_dns_records" {
+  value       = google_cloud_run_domain_mapping.dedi_apex.status[0].resource_records
+  description = "DNS records to create at your registrar for var.dedi_domain."
+}
+
+output "dedi_domain_www_dns_records" {
+  value       = google_cloud_run_domain_mapping.dedi_www.status[0].resource_records
+  description = "DNS records to create at your registrar for var.dedi_domain_www."
+}
+
 output "artifact_registry_repo" {
   value       = "${var.region}-docker.pkg.dev/${var.project_id}/${var.artifact_registry_repo_id}"
   description = "Push images here — see scripts/build-and-push.sh."
