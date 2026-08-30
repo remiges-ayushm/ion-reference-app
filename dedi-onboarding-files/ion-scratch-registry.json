@@ -1,0 +1,49 @@
+{
+  "dedi_version": "0.1",
+  "namespace": "ion-ref-app.ayushmatha.in",
+  "next_update": "2028-08-18T04:20:00Z",
+  "proof": {
+    "verification_method": "key-1",
+    "canonicalization": "JCS",
+    "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..1SZcJW2G0eiX0zLor3y0wPq8hhaVUaLbIKH3HBpRobi7zNZJeQR1PXyNteKpztNibtJDbhTGQloYZ9tNmPC2AQ"
+  },
+  "publisher": {
+    "domain": "ion-ref-app.ayushmatha.in",
+    "key": {
+      "crv": "Ed25519",
+      "kid": "key-1",
+      "kty": "OKP",
+      "x": "nNrqM6oH1Hhvq8c8D9I40Zd3aPNmLqx8-CYiAlTbhoY"
+    }
+  },
+  "records": [
+    {
+      "details": {
+        "countries": [
+          "IDN"
+        ],
+        "encr_public_key": "nNrqM6oH1Hhvq8c8D9I40Zd3aPNmLqx8+CYiAlTbhoY=",
+        "signing_public_key": "nNrqM6oH1Hhvq8c8D9I40Zd3aPNmLqx8+CYiAlTbhoY=",
+        "subscriber_id": "sample-pn.ion-ref-app.ayushmatha.in",
+        "type": "BPP",
+        "url": "https://sample-pn.ion-ref-app.ayushmatha.in/beckn/bpp/receiver/"
+      },
+      "meta": {
+        "catalog_index_urls": [
+          {
+            "url": "https://ion-ref-app.ayushmatha.in/index/becknCatalogs.index.json"
+          }
+        ]
+      },
+      "record_name": "sample-pn-ayushmatha-in"
+    }
+  ],
+  "registry": {
+    "name": "ion-scratch-registry",
+    "schema": "https://raw.githubusercontent.com/LF-Decentralized-Trust-labs/decentralized-directory-protocol/main/schemas/beckn_subscriber.json",
+    "state": "live",
+    "updated_at": "2026-08-18T06:41:00Z"
+  },
+  "source_url": "https://ion-ref-app.ayushmatha.in/dedi/ion-scratch-registry.json",
+  "type": "dedi-file"
+}

@@ -1,0 +1,74 @@
+version: '3'
+
+# Loaded automatically if present; DEDI_PUBLIC_KEY / DEDI_PRIVATE_KEY are expected
+# to already be set there (or exported another way) before running `task sign`.
+dotenv: ['dedi-onboarding-files/.env.local']
+
+vars:
+  SIGNER: './dedi-onboarding-files/dedi-file-signer'
+  REGISTRY_FILE: 'dedi-onboarding-files/ion-scratch-registry.json'
+  INDEX_FILE: 'dedi-onboarding-files/dedi.index.json'
+  NEXT_UPDATE_TTL_SECONDS: 31536000
+
+tasks:
+  sign-dedi-files:
+    desc: >-
+      Re-sign the DeDi registry file, update its digest in the index file,
+      then re-sign the index file. Override paths with REGISTRY_FILE=...
+      INDEX_FILE=...
+    cmds:
+      - task: _ensure-future-next-update
+        vars: {TARGET_FILE: '{{.REGISTRY_FILE}}'}
+      - '{{.SIGNER}} "{{.REGISTRY_FILE}}"'
+      - |
+        set -euo pipefail
+        REGISTRY_FILE="{{.REGISTRY_FILE}}"
+        INDEX_FILE="{{.INDEX_FILE}}"
+        REGISTRY_NAME=$(jq -r '.registry.name // empty' "$REGISTRY_FILE")
+        REGISTRY_URL=$(jq -r '.source_url // empty' "$REGISTRY_FILE")
+        DIGEST="sha-256:$(sha256sum "$REGISTRY_FILE" | cut -d' ' -f1)"
+        TMP=$(mktemp)
+        jq --arg name "$REGISTRY_NAME" --arg url "$REGISTRY_URL" --arg digest "$DIGEST" '
+          (.files[] | select(.registry == $name or .url == $url) | .digest) = $digest
+        ' "$INDEX_FILE" > "$TMP"
+        if ! grep -q "$DIGEST" "$TMP"; then
+          echo "error: no files[] entry in $INDEX_FILE matched registry=\"$REGISTRY_NAME\" or url=\"$REGISTRY_URL\"" >&2
+          rm -f "$TMP"
+          exit 1
+        fi
+        mv "$TMP" "$INDEX_FILE"
+        echo "updated digest in $INDEX_FILE to $DIGEST"
+      - task: _ensure-future-next-update
+        vars: {TARGET_FILE: '{{.INDEX_FILE}}'}
+      - '{{.SIGNER}} "{{.INDEX_FILE}}"'
+
+  deploy-dedi-files:
+    desc: >-
+      Upload the DeDi index and registry files to the dedi-static GCS
+      bucket. Override paths with REGISTRY_FILE=... INDEX_FILE=....
+    vars:
+      DEDI_BUCKET:
+        sh: cd terraform && terraform output -raw dedi_static_bucket
+    cmds:
+      - gsutil cp "{{.INDEX_FILE}}" "gs://{{.DEDI_BUCKET}}/.well-known/dedi.index.json"
+      - gsutil cp "{{.REGISTRY_FILE}}" "gs://{{.DEDI_BUCKET}}/dedi/ion-scratch-registry.json"
+
+  _ensure-future-next-update:
+    internal: true
+    cmds:
+      - |
+        set -euo pipefail
+        FILE="{{.TARGET_FILE}}"
+        NOW=$(date -u +%s)
+        CURRENT=$(jq -r '.next_update // empty' "$FILE")
+        if [ -z "$CURRENT" ]; then
+          echo "no next_update field in $FILE, skipping check"
+        else
+          CURRENT_EPOCH=$(date -u -d "$CURRENT" +%s)
+          if [ "$CURRENT_EPOCH" -le "$NOW" ]; then
+            NEW_VALUE=$(date -u -d "@$((NOW + {{.NEXT_UPDATE_TTL_SECONDS}}))" +%Y-%m-%dT%H:%M:%SZ)
+            TMP=$(mktemp)
+            jq --arg v "$NEW_VALUE" '.next_update = $v' "$FILE" > "$TMP" && mv "$TMP" "$FILE"
+            echo "next_update in $FILE was in the past ($CURRENT); updated to $NEW_VALUE"
+          fi
+        fi

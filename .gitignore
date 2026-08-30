@@ -5,6 +5,7 @@ bpp-application/cmd/server/.env
 config/local-simple-bap.yaml
 config/local-simple-bpp.yaml
 config/catalog-publish.yaml
+dedi-onboarding-files/.env.local
 
 # Terraform local state/cache/vars — state lives in GCS, not here.
 # .terraform.lock.hcl IS committed (pins exact provider versions).

@@ -73,12 +73,12 @@ modules:
           config:
             # subscriberId derives from keyManager.config above.
             nextUpdateIn: "336h"
-            # Public URL prefix outputRoot is served under. Inert
-            # placeholder: outputRoot (/beckn) is plain container-local
-            # storage here, not yet backed by a persistent volume or
-            # served over HTTP by anything in this deployment — a known,
-            # deliberate gap (see README.md), not a bug.
-            catalogBaseURL: "https://catalog-publish-not-yet-served-publicly.invalid"
+            # Public URL prefix outputRoot is served under — the custom
+            # domain dedi-static-server serves this same bucket on (see
+            # terraform/domain-mapping.tf). Set via CATALOG_BASE_URL,
+            # derived from var.dedi_domain, so it stays in sync with
+            # whatever domain is actually mapped.
+            catalogBaseURL: "${CATALOG_BASE_URL}"
             # Read-only, warn-only: checks whether this node's DeDi registry
             # record links this catalog index via meta.catalog_index_urls.
             checkCatalogIndexLink: "true"

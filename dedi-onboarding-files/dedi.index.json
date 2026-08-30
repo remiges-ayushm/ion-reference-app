@@ -1,0 +1,29 @@
+{
+  "dedi_version": "0.1",
+  "domain": "ion-ref-app.ayushmatha.in",
+  "files": [
+    {
+      "digest": "sha-256:e7b72ade84686882d43143298e7e956da687ffe6ef6160214254771016191219",
+      "registry": "ion-scratch-registry",
+      "schema": "https://raw.githubusercontent.com/LF-Decentralized-Trust-labs/decentralized-directory-protocol/main/schemas/beckn_subscriber.json",
+      "url": "https://ion-ref-app.ayushmatha.in/dedi/ion-scratch-registry.json"
+    }
+  ],
+  "keys": [
+    {
+      "crv": "Ed25519",
+      "kid": "key-1",
+      "kty": "OKP",
+      "x": "nNrqM6oH1Hhvq8c8D9I40Zd3aPNmLqx8-CYiAlTbhoY"
+    }
+  ],
+  "name": "ION Reference App",
+  "next_update": "2028-08-18T04:20:00Z",
+  "proof": {
+    "verification_method": "key-1",
+    "canonicalization": "JCS",
+    "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..gMNc4eVTuL5zeuQKDOSC7m0kczen-neaqit_q5c82uzu3fOnlJAQp27_o-UI_V3T_i7dhgPhN_wKTreYmotFBg"
+  },
+  "type": "dedi-manifest",
+  "updated_at": "2026-08-21T15:17:01.000322347Z"
+}
