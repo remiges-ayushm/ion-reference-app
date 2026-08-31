@@ -36,6 +36,13 @@ type Config struct {
 	// CDSPublishURL is the catalog discovery service endpoint that receives catalog/publish requests.
 	CDSPublishURL string
 
+	// CatalogBaseURL is the public, stable domain the DeDi discovery chain is
+	// served on (same value onix-catalog-publish uses for its own
+	// catalogBaseURL — see terraform/domain-mapping.tf). Optional: this
+	// whole custom-domain feature is optional (see README.md), so an empty
+	// value here just means PublishedBppURI() falls back to BppURI.
+	CatalogBaseURL string
+
 	// BppPrivateKey is the base64-encoded Ed25519 private key (64 bytes) or seed (32 bytes)
 	// used to sign outbound Beckn requests. Required when CDSPublishURL is set.
 	// Env: BPP_PRIVATE_KEY
@@ -66,7 +73,8 @@ func Load() (*Config, error) {
 		NetworkID:    os.Getenv("NETWORK_ID"),
 		BppCallerURL: os.Getenv("BPP_CALLER_URL"),
 
-		CDSPublishURL: os.Getenv("CDS_PUBLISH_URL"),
+		CDSPublishURL:  os.Getenv("CDS_PUBLISH_URL"),
+		CatalogBaseURL: os.Getenv("CATALOG_BASE_URL"),
 
 		BppPrivateKey: os.Getenv("BPP_PRIVATE_KEY"),
 		BppKeyID:      os.Getenv("BPP_KEY_ID"),
@@ -96,6 +104,17 @@ func (c *Config) DBPortInt() int {
 // IsProduction reports whether the application is running in production mode.
 func (c *Config) IsProduction() bool {
 	return c.AppEnv == "production"
+}
+
+// PublishedBppURI returns the bppUri to embed in catalog/publish payloads —
+// the stable public domain (CatalogBaseURL) with the receiver path appended,
+// not BppURI (the Cloud Run URL used for actual select/init/confirm
+// routing). Falls back to BppURI if CatalogBaseURL isn't configured.
+func (c *Config) PublishedBppURI() string {
+	if c.CatalogBaseURL == "" {
+		return c.BppURI
+	}
+	return c.CatalogBaseURL + "/bpp/receiver/"
 }
 
 func (c *Config) validate() error {

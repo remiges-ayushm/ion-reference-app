@@ -146,6 +146,12 @@ var onixVisibleToNetworks = []string{
 // ToOnixCatalog converts a Catalog into the shape onix-catalog-publisher
 // expects: bppId/bppUri/isActive stamped on the catalog, and the catalog's
 // provider (incl. availableAt) duplicated onto every resource.
+//
+// The catalog id is namespaced as "<bppId>/<catalogId>" — a bare id isn't
+// guaranteed unique across the network (two different BPPs could otherwise
+// publish colliding catalog ids). Must match ToOnixPublishDirective's
+// CatalogID exactly, since the plugin associates a publish directive with
+// its catalog by this id.
 func ToOnixCatalog(cat Catalog, bppID, bppURI string) OnixCatalog {
 	resources := make([]OnixResource, len(cat.Resources))
 	for i, r := range cat.Resources {
@@ -159,7 +165,7 @@ func ToOnixCatalog(cat Catalog, bppID, bppURI string) OnixCatalog {
 		}
 	}
 	return OnixCatalog{
-		ID:         cat.ID,
+		ID:         bppID + "/" + cat.ID,
 		BppID:      bppID,
 		BppURI:     bppURI,
 		IsActive:   true,
@@ -173,14 +179,15 @@ func ToOnixCatalog(cat Catalog, bppID, bppURI string) OnixCatalog {
 
 // ToOnixPublishDirective builds the top-level publishDirectives entry for
 // one catalog, keyed by catalogId so multi-catalog requests produce one
-// directive per catalog.
-func ToOnixPublishDirective(cat Catalog) OnixPublishDirective {
+// directive per catalog. bppID must be the same value passed to
+// ToOnixCatalog for this catalog — see its doc comment on the id namespacing.
+func ToOnixPublishDirective(cat Catalog, bppID string) OnixPublishDirective {
 	catalogType := "REGULAR"
 	if cat.PublishDirectives != nil && cat.PublishDirectives.CatalogType != "" {
 		catalogType = strings.ToUpper(cat.PublishDirectives.CatalogType)
 	}
 	return OnixPublishDirective{
-		CatalogID:   cat.ID,
+		CatalogID:   bppID + "/" + cat.ID,
 		VisibleTo:   onixVisibleToNetworks,
 		CatalogType: catalogType,
 	}

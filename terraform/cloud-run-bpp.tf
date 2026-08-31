@@ -96,6 +96,10 @@ resource "google_cloud_run_v2_service" "bpp" {
         value = "${google_cloud_run_v2_service.onix_catalog_publish.uri}/catalog/publish"
       }
       env {
+        name  = "CATALOG_BASE_URL"
+        value = "https://${var.dedi_domain}"
+      }
+      env {
         name = "BPP_PRIVATE_KEY"
         value_source {
           secret_key_ref {

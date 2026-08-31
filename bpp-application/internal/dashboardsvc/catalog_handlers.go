@@ -689,12 +689,12 @@ func (h *Handler) HandlePublishCatalog(c *gin.Context) {
 			TransactionID: txID.String(),
 			MessageID:     msgID.String(),
 			BppID:         h.cfg.BppID,
-			BppURI:        h.cfg.BppURI,
+			BppURI:        h.cfg.PublishedBppURI(),
 			NetworkID:     h.cfg.NetworkID,
 		},
 		Message: catalog.OnixPublishMessage{
-			Catalogs:          []catalog.OnixCatalog{catalog.ToOnixCatalog(becknCat, h.cfg.BppID, h.cfg.BppURI)},
-			PublishDirectives: []catalog.OnixPublishDirective{catalog.ToOnixPublishDirective(becknCat)},
+			Catalogs:          []catalog.OnixCatalog{catalog.ToOnixCatalog(becknCat, h.cfg.BppID, h.cfg.PublishedBppURI())},
+			PublishDirectives: []catalog.OnixPublishDirective{catalog.ToOnixPublishDirective(becknCat, h.cfg.BppID)},
 		},
 	}
 

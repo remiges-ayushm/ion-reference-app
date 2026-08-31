@@ -134,8 +134,8 @@ func (s *PublishService) forwardToCDS(ctx context.Context, txID uuid.UUID, req *
 	onixCatalogs := make([]OnixCatalog, len(req.Catalogs))
 	directives := make([]OnixPublishDirective, len(req.Catalogs))
 	for i, c := range req.Catalogs {
-		onixCatalogs[i] = ToOnixCatalog(c, s.cfg.BppID, s.cfg.BppURI)
-		directives[i] = ToOnixPublishDirective(c)
+		onixCatalogs[i] = ToOnixCatalog(c, s.cfg.BppID, s.cfg.PublishedBppURI())
+		directives[i] = ToOnixPublishDirective(c, s.cfg.BppID)
 	}
 
 	becknReq := OnixPublishRequest{
@@ -146,7 +146,7 @@ func (s *PublishService) forwardToCDS(ctx context.Context, txID uuid.UUID, req *
 			TransactionID: txID.String(),
 			MessageID:     outboundMsgID.String(),
 			BppID:         s.cfg.BppID,
-			BppURI:        s.cfg.BppURI,
+			BppURI:        s.cfg.PublishedBppURI(),
 			NetworkID:     s.cfg.NetworkID,
 		},
 		Message: OnixPublishMessage{Catalogs: onixCatalogs, PublishDirectives: directives},
