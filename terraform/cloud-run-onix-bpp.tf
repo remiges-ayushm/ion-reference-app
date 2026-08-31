@@ -2,7 +2,7 @@
 # which patches BPP_URL once every service's URL is known.
 
 resource "google_cloud_run_v2_service" "onix_bpp" {
-  name                = "onix-bpp"
+  name                = "beckn-onix-bpp"
   project             = var.project_id
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"

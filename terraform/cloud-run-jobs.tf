@@ -11,10 +11,11 @@
 # Cloud SQL Auth Proxy sidecar instead of localhost.
 
 resource "google_cloud_run_v2_job" "migrate_bap" {
-  name       = "migrate-bap"
-  project    = var.project_id
-  location   = var.region
-  depends_on = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
+  deletion_protection = false
+  name                = "migrate-bap"
+  project             = var.project_id
+  location            = var.region
+  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
 
   template {
     template {
@@ -85,10 +86,11 @@ resource "google_cloud_run_v2_job" "migrate_bap" {
 }
 
 resource "google_cloud_run_v2_job" "migrate_bpp" {
-  name       = "migrate-bpp"
-  project    = var.project_id
-  location   = var.region
-  depends_on = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
+  deletion_protection = false
+  name                = "migrate-bpp"
+  project             = var.project_id
+  location            = var.region
+  depends_on          = [google_project_service.apis, google_compute_subnetwork_iam_member.network_user, google_secret_manager_secret_iam_member.accessor, google_sql_database_instance.postgres]
 
   template {
     template {

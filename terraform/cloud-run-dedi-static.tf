@@ -7,7 +7,7 @@
 resource "google_cloud_run_v2_service" "dedi_static" {
   name                = "dedi-static-server"
   project             = var.project_id
-  location            = "asia-southeast1"
+  location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
   deletion_protection = false
   depends_on          = [google_project_service.apis, google_storage_bucket_iam_member.dedi_static_public_read]

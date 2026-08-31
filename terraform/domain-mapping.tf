@@ -19,7 +19,7 @@
 
 resource "google_cloud_run_domain_mapping" "dedi_apex" {
   name     = var.dedi_domain
-  location = "asia-southeast1"
+  location = var.region
   project  = var.project_id
 
   metadata {
@@ -33,7 +33,7 @@ resource "google_cloud_run_domain_mapping" "dedi_apex" {
 
 resource "google_cloud_run_domain_mapping" "dedi_www" {
   name     = var.dedi_domain_www
-  location = "asia-southeast1"
+  location = var.region
   project  = var.project_id
 
   metadata {

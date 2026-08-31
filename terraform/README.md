@@ -6,6 +6,13 @@ by default), along with a dedicated Cloud SQL Postgres instance and a
 dedicated Memorystore Redis instance created inside that same project.
 Everything lives in one project — no Shared VPC, no cross-project reuse.
 
+The onix-bap/onix-bpp Cloud Run services are named `beckn-onix-bap`/
+`beckn-onix-bpp` (not the bare `onix-bap`/`onix-bpp`) — a prefix added
+specifically to avoid colliding with unrelated pre-existing services that
+happened to already exist under those exact names in one project this was
+deployed to. If you're deploying into a genuinely fresh project you could
+safely rename them back, but there's no need to — the prefix is harmless.
+
 This directory replaces `docker-compose.yml`'s Docker-network hostnames
 (`http://bap:8083`, `redis-bap:6379`, ...) with Cloud Run's per-service HTTPS
 URLs and the new instances' addresses.
@@ -267,7 +274,7 @@ URLs and the new instances' addresses.
 - `gcloud run jobs executions list --job=migrate-bap --project=ion-sandbox-001` — confirm `Succeeded` (same for migrate-bpp).
 - Repeat the discover → select flow against the new `bap_url`, watching
   `gcloud logging read 'resource.type="cloud_run_revision" AND resource.labels.service_name="bap"' --project=ion-sandbox-001 --freshness=5m`
-  (swap the service name for `onix-bap`/`bpp`/`onix-bpp` as needed) for
+  (swap the service name for `beckn-onix-bap`/`bpp`/`beckn-onix-bpp` as needed) for
   signing errors or connectivity failures.
 - A cloudsql-proxy sidecar failing its startup probe means the
   `roles/cloudsql.client` grant isn't working; onix logs timing out reaching

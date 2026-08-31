@@ -9,7 +9,7 @@
 resource "google_storage_bucket" "dedi_static" {
   name                        = "${var.project_id}-dedi-static"
   project                     = var.project_id
-  location                    = "asia-southeast1"
+  location                    = var.region
   force_destroy               = false
   uniform_bucket_level_access = true
 

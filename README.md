@@ -201,9 +201,22 @@ that `outputRoot` with a public GCS bucket and a small nginx service
 custom domain (`var.dedi_domain`/`var.dedi_domain_www`) so the discovery
 chain — `.well-known/dedi.index.json` → `dedi/ion-scratch-registry.json` →
 `index/becknCatalogs.index.json` → the catalog files themselves — is
-publicly reachable. This is optional; the rest of the deployment works
-without it (though `onix-catalog-publish`'s output has nowhere durable to go
-if you skip the bucket entirely).
+publicly reachable. The *feature* is optional (the rest of the deployment
+works without it, though `onix-catalog-publish`'s output has nowhere durable
+to go if you skip it) — but the underlying Terraform **resources are not
+conditional**, there's no flag to skip creating them. That means:
+
+**This will fail on a fresh deploy unless you change `dedi_domain`/
+`dedi_domain_www` to a domain you actually own and can verify.** The
+variable defaults point at a domain the original deployer of this repo
+controls, not you — `terraform apply` will try to create a domain mapping
+for it, which fails since you can't verify ownership of someone else's
+domain in Search Console. **Treat this as a second expected failure, the
+same way step 7 above already primes you for `bap`/`bpp` failing** — set
+`dedi_domain`/`dedi_domain_www` in `terraform.tfvars` to your own verified
+domain (following the steps below) before applying, or the `google_cloud_run_domain_mapping`
+resources will fail every time and you'll need to re-apply once they're set
+correctly, same shape as the bap/bpp dance.
 
 **Prerequisite:** the domain must be a **verified domain** in
 [Search Console](https://search.google.com/search-console) under the same

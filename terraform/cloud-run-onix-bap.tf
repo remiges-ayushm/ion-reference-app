@@ -3,7 +3,7 @@
 # template) once every service's URL is known.
 
 resource "google_cloud_run_v2_service" "onix_bap" {
-  name                = "onix-bap"
+  name                = "beckn-onix-bap"
   project             = var.project_id
   location            = var.region
   ingress             = "INGRESS_TRAFFIC_ALL"
