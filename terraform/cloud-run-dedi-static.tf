@@ -33,6 +33,16 @@ resource "google_cloud_run_v2_service" "dedi_static" {
       name  = "dedi-static-server"
       image = local.images.dedi_static_server
 
+      env {
+        name  = "ONIX_BPP_HOST"
+        value = trimprefix(google_cloud_run_v2_service.onix_bpp.uri, "https://")
+      }
+
+      env {
+        name  = "ONIX_BAP_HOST"
+        value = trimprefix(google_cloud_run_v2_service.onix_bap.uri, "https://")
+      }
+
       ports {
         container_port = 80
       }

@@ -5,7 +5,7 @@
   "proof": {
     "verification_method": "key-1",
     "canonicalization": "JCS",
-    "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..1SZcJW2G0eiX0zLor3y0wPq8hhaVUaLbIKH3HBpRobi7zNZJeQR1PXyNteKpztNibtJDbhTGQloYZ9tNmPC2AQ"
+    "jws": "eyJhbGciOiJFZERTQSIsImI2NCI6ZmFsc2UsImNyaXQiOlsiYjY0Il19..I-ThT6kJeKEObfuC9klDfggvwctWCjvgadlh06XCMlLzExVRdYdEi8RKw6k-LfefbVopsABXYn72I6_uj1g7BA"
   },
   "publisher": {
     "domain": "ion-ref-app.ayushmatha.in",
@@ -26,7 +26,7 @@
         "signing_public_key": "nNrqM6oH1Hhvq8c8D9I40Zd3aPNmLqx8+CYiAlTbhoY=",
         "subscriber_id": "sample-pn.ion-ref-app.ayushmatha.in",
         "type": "BPP",
-        "url": "https://sample-pn.ion-ref-app.ayushmatha.in/beckn/bpp/receiver/"
+        "url": "https://ion-ref-app.ayushmatha.in/bpp/receiver/"
       },
       "meta": {
         "catalog_index_urls": [

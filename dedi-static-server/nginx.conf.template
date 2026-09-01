@@ -1,0 +1,30 @@
+server {
+    listen 80;
+
+    root /usr/share/nginx/html;
+
+    # DeDi discovery files (index.json, registry files, catalog files) are
+    # fetched cross-origin by other network participants — allow it.
+    add_header Access-Control-Allow-Origin "*" always;
+
+    location /bpp/receiver/ {
+        proxy_pass https://${ONIX_BPP_HOST}/bpp/receiver/;
+        proxy_ssl_server_name on;
+        proxy_set_header Host ${ONIX_BPP_HOST};
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location /bap/receiver/ {
+        proxy_pass https://${ONIX_BAP_HOST}/bap/receiver/;
+        proxy_ssl_server_name on;
+        proxy_set_header Host ${ONIX_BAP_HOST};
+        proxy_set_header X-Forwarded-For $remote_addr;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    location / {
+        try_files $uri =404;
+        add_header Cache-Control "no-cache";
+    }
+}

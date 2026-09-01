@@ -259,6 +259,61 @@ Google account your `gcloud`/Terraform credentials use —
 6. Wait for the managed SSL cert (up to ~60 min after DNS propagates), then
    `curl https://<your domain>/.well-known/dedi.index.json`.
 
+## Routing BPP/BAP receiver calls through the custom domain (optional)
+
+Builds on the section above — requires the custom domain already mapped to
+`dedi-static-server`. `dedi-static-server`'s nginx also reverse-proxies
+`/bpp/receiver/*` → `onix-bpp` and `/bap/receiver/*` → `onix-bap`, so a
+subscriber's registered URL can be `https://<your domain>/bpp/receiver/` (or
+`/bap/receiver/`) instead of `onix-bpp`'s/`onix-bap`'s raw `*.run.app` URL.
+
+This also sidesteps the path mismatch in
+[terraform/README.md's Gotcha #7](terraform/README.md#gotchas-actually-hit-doing-this-not-theoretical--each-one-broke-a-real-deploy):
+other participants append `/<action>` directly to whatever URL is
+registered, and `onix`'s receiver modules default to listening at
+`/bpp/receiver/`/`/bap/receiver/` — baking that same suffix into the
+*registered* URL itself makes `<registered-url>/<action>` land correctly,
+without needing to change either receiver module's own listening path.
+
+**How it's wired:**
+- `dedi-static-server/nginx.conf.template` — the two `location` blocks doing
+  the proxying, targeting `${ONIX_BPP_HOST}`/`${ONIX_BAP_HOST}`.
+- `dedi-static-server/Dockerfile` — `COPY`s that template into
+  `/etc/nginx/templates/default.conf.template` rather than directly into
+  `/etc/nginx/conf.d/`, so `nginx:alpine`'s built-in entrypoint does the
+  `envsubst` substitution from real environment variables at container
+  startup. This has to happen at *startup*, not image build time, because
+  the target host is only known once `onix-bpp`/`onix-bap` already exist.
+- `terraform/cloud-run-dedi-static.tf` — sets `ONIX_BPP_HOST`/`ONIX_BAP_HOST`
+  on the container from `google_cloud_run_v2_service.onix_bpp.uri` /
+  `google_cloud_run_v2_service.onix_bap.uri` (scheme stripped).
+- Redeploying after touching any of the above is the same as any other
+  Cloud Run image change — see "Redeploy after a change" → "Code change in
+  any service" below.
+
+**Do not extend this to `/bpp/caller/` or `/bap/caller/`.** Unlike the
+receiver modules (`validateSign` is their first processing step), the caller
+modules have no inbound signature validation — they trust whoever calls them
+and sign+forward outbound messages on the participant's behalf. They're
+meant to stay reachable only internally: `BPP_CALLER_URL`/`ADAPTER_URL`
+point directly at `onix-bpp`'s/`onix-bap`'s raw Cloud Run URL, set by
+`terraform/cloud-run-wiring.tf`. Proxying either publicly would let anyone
+get that adapter to sign and send forged outbound messages impersonating
+this participant.
+
+**Open question, not yet resolved:** this section only changes what a
+subscriber's *registered* URL can look like — it doesn't touch `BAP_URI`/
+`BPP_URI` (the in-band `context.bapUri`/`context.bppUri` fields on outbound
+messages), which `terraform/cloud-run-wiring.tf` sets to `onix-bap`'s/
+`onix-bpp`'s raw URL, with an explicit comment warning against putting the
+receiver path there. Whether pointing `BAP_URI`/`BPP_URI` at this same
+domain+path is *also* safe depends on how `onix`'s caller module builds a
+callback URL from `context.bapUri`/`context.bppUri` internally — possibly
+appending `/bap/receiver/`(or `/bpp/receiver/`) unconditionally regardless of
+what's already in the value, which would double the path and break
+callbacks. This hasn't been verified against `onix`'s source, so treat it as
+untested rather than following the same pattern here.
+
 ## Redeploy after a change
 
 ### A new service added to the Terraform module
