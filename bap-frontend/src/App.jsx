@@ -26,8 +26,16 @@ function parseCatalogs(data) {
     (cat.resources || []).forEach(res => {
       if (!res?.id) return; // skip malformed entries
 
-      // Find the offer that covers this resource
-      const offer = cat.offers?.find(o => o.resourceIds?.includes(res.id)) || null;
+      // Find the offer that covers this resource. A resource can have more than
+      // one matching offer — e.g. bpp-frontend's "Add Product" step creates an
+      // empty placeholder offer (no price) alongside the resource, then a real
+      // priced offer gets added afterward via "Add Offer". Prefer whichever
+      // matching offer actually carries price data over the first one found.
+      const offerHasPrice = o =>
+        (o.considerations?.[0]?.considerationAttributes?.totalAmount != null) ||
+        (o.offerAttributes?.price?.value != null);
+      const matchingOffers = (cat.offers || []).filter(o => o.resourceIds?.includes(res.id));
+      const offer = matchingOffers.find(offerHasPrice) || matchingOffers[0] || null;
 
       // Resources with no offer have no price — skip them to avoid blank cards.
       if (!offer) return;
