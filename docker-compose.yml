@@ -265,6 +265,20 @@ services:
     networks:
       - beckn
 
+  # ─── Landing Page (buyer/seller entry point) ────────────────────────────
+  landing-page:
+    build:
+      context: ./landing-page
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      BAP_URL: http://localhost:3000
+      BPP_URL: http://localhost:3001
+    ports:
+      - "3002:80"
+    networks:
+      - beckn
+
 volumes:
   postgres_data:
 

@@ -37,6 +37,11 @@ output "dedi_static_server_url" {
   value = google_cloud_run_v2_service.dedi_static.uri
 }
 
+output "landing_page_url" {
+  value       = google_cloud_run_v2_service.landing_page.uri
+  description = "Public URL — the entry-point page with buttons to the buyer and seller apps."
+}
+
 output "dedi_domain_dns_records" {
   value       = google_cloud_run_domain_mapping.dedi_apex.status[0].resource_records
   description = "DNS records to create at your registrar for var.dedi_domain."

@@ -13,6 +13,7 @@ locals {
     onix_bap             = google_cloud_run_v2_service.onix_bap.name
     onix_bpp             = google_cloud_run_v2_service.onix_bpp.name
     onix_catalog_publish = google_cloud_run_v2_service.onix_catalog_publish.name
+    landing_page         = google_cloud_run_v2_service.landing_page.name
   }
 }
 
