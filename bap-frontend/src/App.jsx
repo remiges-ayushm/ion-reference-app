@@ -1609,12 +1609,11 @@ export default function App() {
       {/* ── Nav ──────────────────────────────────────────────────────────── */}
       <header className="sticky top-0 z-30 glass border-b border-white/[0.06]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center gap-4">
-          <a href="https://remiges.tech" target="_blank" rel="noopener noreferrer" className="shrink-0">
+          <a href="https://ion.id" target="_blank" rel="noopener noreferrer" className="shrink-0">
             <img
-              src="https://remiges.tech/wp-content/uploads/2024/04/Remiges-logo-2048x403.png"
-              alt="Remiges"
-              className="h-7 w-auto rounded"
-              style={{ filter: 'brightness(0) invert(1)', opacity: 0.92 }}
+              src="https://ion.id/assets/ion-logo-new-BW6VBpcN.png"
+              alt="ION"
+              className="h-9 w-auto rounded"
             />
           </a>
 

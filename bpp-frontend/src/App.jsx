@@ -148,9 +148,8 @@ function Sidebar({ active, onNav, open, onClose }) {
       <div className="px-5 pt-5 pb-4 border-b border-white/[0.06] flex items-center justify-between">
         <div>
           <img
-            src="https://remiges.tech/wp-content/uploads/2024/04/Remiges-logo-2048x403.png"
-            alt="Remiges" className="h-6 w-auto"
-            style={{ filter: 'brightness(0) invert(1)', opacity: 0.85 }}
+            src="https://ion.id/assets/ion-logo-new-BW6VBpcN.png"
+            alt="ION" className="h-8 w-auto"
           />
           <div className="mt-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
