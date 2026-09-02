@@ -147,10 +147,9 @@ function Sidebar({ active, onNav, open, onClose }) {
       {/* Logo */}
       <div className="px-5 pt-5 pb-4 border-b border-white/[0.06] flex items-center justify-between">
         <div>
-          <img
-            src="https://ion.id/assets/ion-logo-new-BW6VBpcN.png"
-            alt="ION" className="h-8 w-auto"
-          />
+          <span className="text-lg font-bold text-white tracking-tight">
+            ION <span className="font-normal text-slate-400">Reference App</span>
+          </span>
           <div className="mt-3 flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
             <p className="text-[10px] text-slate-500 font-medium">BPP Admin · ION Network</p>
@@ -3145,6 +3144,10 @@ export default function App() {
       <Sidebar active={page} onNav={onNav} open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <main className="flex-1 lg:ml-64 min-h-screen overflow-y-auto">
+        <div className="bg-orange-500 text-white text-xs sm:text-sm text-center py-1.5 px-4">
+          This is the seller (bpp) reference app for ION network managed by remiges technologies pvt. ltd.
+        </div>
+
         {/* Mobile top bar */}
         <div className="lg:hidden sticky top-0 z-30 flex items-center gap-3 px-4 py-3 border-b border-white/[0.06]"
           style={{ background: '#0a0e1a' }}>

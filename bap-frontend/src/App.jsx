@@ -1610,11 +1610,9 @@ export default function App() {
       <header className="sticky top-0 z-30 glass border-b border-white/[0.06]">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center gap-4">
           <a href="https://ion.id" target="_blank" rel="noopener noreferrer" className="shrink-0">
-            <img
-              src="https://ion.id/assets/ion-logo-new-BW6VBpcN.png"
-              alt="ION"
-              className="h-9 w-auto rounded"
-            />
+            <span className="text-xl font-bold text-white tracking-tight">
+              ION <span className="font-normal text-slate-400">Reference App</span>
+            </span>
           </a>
 
           <form onSubmit={e => { e.preventDefault(); clearTimeout(debounceRef.current); discover(searchQuery); }} className="flex-1 max-w-2xl mx-auto">
@@ -1660,6 +1658,10 @@ export default function App() {
           </button>
         </div>
       </header>
+
+      <div className="bg-orange-500 text-white text-xs sm:text-sm text-center py-1.5 px-4">
+        This is the buyer (bap) reference app for ION network managed by remiges technologies pvt. ltd.
+      </div>
 
       {/* ── Category chips + sort ─────────────────────────────────────────── */}
       {catalog.length > 0 && (
