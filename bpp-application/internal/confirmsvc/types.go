@@ -109,6 +109,12 @@ type Resource struct {
 	ID                 string          `json:"id"`
 	Descriptor         *Descriptor     `json:"descriptor,omitempty"`
 	ResourceAttributes json.RawMessage `json:"resourceAttributes,omitempty"`
+	Quantity           *quantity       `json:"quantity,omitempty"`
+}
+
+type quantity struct {
+	UnitCode     string  `json:"unitCode"`
+	UnitQuantity float64 `json:"unitQuantity"`
 }
 
 type Descriptor struct {

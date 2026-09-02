@@ -55,7 +55,7 @@ func (s *Service) Process(ctx context.Context, req *RateRequest) {
 		if rangeJSON == nil {
 			rangeJSON = json.RawMessage(`{}`)
 		}
-		descriptorJSON := input.Descriptor
+		descriptorJSON := input.Target.Descriptor
 		if descriptorJSON == nil {
 			descriptorJSON = json.RawMessage(`{}`)
 		}
@@ -68,15 +68,15 @@ func (s *Service) Process(ctx context.Context, req *RateRequest) {
 			ContractID:             row.ID,
 			BapID:                  req.Context.BapID,
 			BapUri:                 req.Context.BapURI,
-			TargetID:               input.ID,
+			TargetID:               row.ID.String(),
 			TargetDescriptor:       descriptorJSON,
 			Range:                  rangeJSON,
 			FeedbackFormSubmission: feedbackJSON,
 			IsPreview:              false,
 		}); err != nil {
-			s.lh.WithModule("ratesvc").Warn().Error(err).Log("insert rating failed for target " + input.ID)
+			s.lh.WithModule("ratesvc").Warn().Error(err).Log("insert rating failed for contract " + row.ID.String())
 		}
-		summaries = append(summaries, RatingSummary{ID: input.ID, Range: rangeJSON})
+		summaries = append(summaries, RatingSummary{Target: input.Target, Range: rangeJSON})
 	}
 
 	outMsgID := uuid.New()

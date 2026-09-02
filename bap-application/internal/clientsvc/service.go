@@ -716,36 +716,24 @@ func (s *ClientService) Rate(ctx context.Context, req *ClientRateRequest) error 
 	}
 	bppID, bppURI := s.resolveBPP(txn)
 
-	// Resolve the contract ID from the latest snapshot so ratingInputs[].id
-	// references the actual contract, not the transaction.
-	contractID := req.TransactionID // fallback
-	if snap, err := q.GetLatestContractSnapshot(ctx, txnID); err == nil {
-		var env struct {
-			Message struct {
-				Contract struct {
-					ID string `json:"id"`
-				} `json:"contract"`
-			} `json:"message"`
-		}
-		if json.Unmarshal(snap.Contract, &env) == nil && env.Message.Contract.ID != "" {
-			contractID = env.Message.Contract.ID
-		}
+	// Wire shape mirrors the Beckn v2 RatingInput schema exactly
+	// (additionalProperties=false, required: target, range) — no
+	// ratingCategory or top-level id/descriptor; those don't exist in the
+	// schema, only target.id/target.descriptor do.
+	type ratingTargetWire struct {
+		ID         string          `json:"id,omitempty"`
+		Descriptor json.RawMessage `json:"descriptor,omitempty"`
 	}
-
-	// Build rating inputs, omitting null feedbackFormSubmission to avoid
-	// adapter parsing errors ("MessageID: %!s(<nil>)").
 	type ratingInputWire struct {
-		ID               string      `json:"id"`
-		RatingCategory   string      `json:"ratingCategory"`
-		Range            interface{} `json:"range"`
-		FeedbackForm     interface{} `json:"feedbackFormSubmission,omitempty"`
+		Target       ratingTargetWire `json:"target"`
+		Range        interface{}      `json:"range"`
+		FeedbackForm interface{}      `json:"feedbackFormSubmission,omitempty"`
 	}
 	inputs := make([]ratingInputWire, 0, len(req.RatingInputs))
 	for _, ri := range req.RatingInputs {
 		w := ratingInputWire{
-			ID:             contractID,
-			RatingCategory: ri.RatingCategory,
-			Range:          ri.Range,
+			Target: ratingTargetWire{ID: ri.ID, Descriptor: ri.Descriptor},
+			Range:  ri.Range,
 		}
 		if ri.FeedbackFormSubmission != nil {
 			w.FeedbackForm = ri.FeedbackFormSubmission

@@ -7,6 +7,8 @@ routingRules:
       - confirm
       - status
       - cancel
+      - update
+      - rate
       - support
   - version: "2.0.0"
     targetType: "url"

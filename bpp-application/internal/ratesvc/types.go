@@ -25,13 +25,19 @@ type RateMessage struct {
 	RatingInputs []RatingInput `json:"ratingInputs"`
 }
 
-type RatingInput struct {
-	// ID of the entity being rated (contract, resource, provider, etc.)
-	ID               string          `json:"id"`
-	RatingCategory   string          `json:"ratingCategory,omitempty"`
+// RatingTarget is the entity being rated (order/item/fulfillment/provider/agent).
+type RatingTarget struct {
+	ID               string          `json:"id,omitempty"`
 	Descriptor       json.RawMessage `json:"descriptor,omitempty"`
-	Range            json.RawMessage `json:"range"`
-	FeedbackForm     json.RawMessage `json:"feedbackForm,omitempty"`
+	TargetAttributes json.RawMessage `json:"targetAttributes,omitempty"`
+}
+
+// RatingInput mirrors the Beckn v2 RatingInput schema exactly
+// (additionalProperties=false, required: target, range) — no ratingCategory,
+// no top-level id/descriptor/feedbackForm; those don't exist in the schema.
+type RatingInput struct {
+	Target                 RatingTarget    `json:"target"`
+	Range                  json.RawMessage `json:"range"`
 	FeedbackFormSubmission json.RawMessage `json:"feedbackFormSubmission,omitempty"`
 }
 
@@ -44,9 +50,11 @@ type OnRateMessage struct {
 	Ratings []RatingSummary `json:"ratings"`
 }
 
+// RatingSummary is the OnRateAction.ratings item — the schema defines it as
+// the same shape as RatingInput (required: target, range).
 type RatingSummary struct {
-	ID    string          `json:"id"`
-	Range json.RawMessage `json:"range"`
+	Target RatingTarget    `json:"target"`
+	Range  json.RawMessage `json:"range"`
 }
 
 type BecknACK struct {

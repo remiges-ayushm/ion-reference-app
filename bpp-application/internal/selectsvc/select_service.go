@@ -215,7 +215,13 @@ func (s *SelectService) enrichCommitment(
 	for _, r := range c.Resources {
 		dbRes, err := q.GetResource(ctx, dbsqlc.GetResourceParams{ID: r.ID, BppID: bppID})
 		if err != nil {
-			enrichedResources = append(enrichedResources, r) // pass-through as-is
+			// Pass-through as-is, but the schema requires every resource to
+			// carry its own quantity — the inbound resource from BAP only
+			// has one nested in commitmentAttributes, not here.
+			if r.Quantity == nil {
+				r.Quantity = &quantity{UnitCode: "EA", UnitQuantity: qty}
+			}
+			enrichedResources = append(enrichedResources, r)
 			continue
 		}
 		enrichedResources = append(enrichedResources, Resource{

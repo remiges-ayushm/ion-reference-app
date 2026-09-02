@@ -7,6 +7,8 @@ routingRules:
       - on_confirm
       - on_status
       - on_cancel
+      - on_update
+      - on_rate
       - on_support
   - version: "2.0.0"
     targetType: "url"
