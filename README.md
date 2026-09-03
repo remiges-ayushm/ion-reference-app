@@ -206,17 +206,14 @@ works without it, though `onix-catalog-publish`'s output has nowhere durable
 to go if you skip it) — but the underlying Terraform **resources are not
 conditional**, there's no flag to skip creating them. That means:
 
-**This will fail on a fresh deploy unless you change `dedi_domain`/
-`dedi_domain_www` to a domain you actually own and can verify.** The
-variable defaults point at a domain the original deployer of this repo
-controls, not you — `terraform apply` will try to create a domain mapping
-for it, which fails since you can't verify ownership of someone else's
-domain in Search Console. **Treat this as a second expected failure, the
-same way step 7 above already primes you for `bap`/`bpp` failing** — set
-`dedi_domain`/`dedi_domain_www` in `terraform.tfvars` to your own verified
-domain (following the steps below) before applying, or the `google_cloud_run_domain_mapping`
-resources will fail every time and you'll need to re-apply once they're set
-correctly, same shape as the bap/bpp dance.
+**`dedi_domain`/`dedi_domain_www` have no default** — same treatment as
+`bap_id`/`bpp_id`/`network_id`/`cds_discover_url` above, and for the same
+reason: a hardcoded default pointing at *some* domain is exactly how you'd
+end up silently deploying against a domain you don't control. `terraform
+plan` fails immediately and loudly ("no value for required variable") until
+you set both in `terraform.tfvars` to a domain you actually own and can
+verify — before that, there's no `apply`-time surprise to plan around, this
+is caught at `plan` time.
 
 **Prerequisite:** the domain must be a **verified domain** in
 [Search Console](https://search.google.com/search-console) under the same
@@ -225,8 +222,8 @@ Google account your `gcloud`/Terraform credentials use —
 
 **Deploy sequence:**
 
-1. Set `dedi_domain`/`dedi_domain_www` in `terraform.tfvars` if you're not
-   using the defaults.
+1. Set `dedi_domain`/`dedi_domain_www` in `terraform.tfvars` — required,
+   `terraform plan` fails without them.
 2. Build and push the `dedi-static-server` image — it's included in step 5
    above if you're deploying fresh. If you're adding this to an
    **already-running** deployment, build and push it explicitly before
@@ -301,18 +298,43 @@ point directly at `onix-bpp`'s/`onix-bap`'s raw Cloud Run URL, set by
 get that adapter to sign and send forged outbound messages impersonating
 this participant.
 
-**Open question, not yet resolved:** this section only changes what a
-subscriber's *registered* URL can look like — it doesn't touch `BAP_URI`/
-`BPP_URI` (the in-band `context.bapUri`/`context.bppUri` fields on outbound
-messages), which `terraform/cloud-run-wiring.tf` sets to `onix-bap`'s/
-`onix-bpp`'s raw URL, with an explicit comment warning against putting the
-receiver path there. Whether pointing `BAP_URI`/`BPP_URI` at this same
-domain+path is *also* safe depends on how `onix`'s caller module builds a
-callback URL from `context.bapUri`/`context.bppUri` internally — possibly
-appending `/bap/receiver/`(or `/bpp/receiver/`) unconditionally regardless of
-what's already in the value, which would double the path and break
-callbacks. This hasn't been verified against `onix`'s source, so treat it as
-untested rather than following the same pattern here.
+**Update:** `BAP_URI`/`BPP_URI` (the in-band `context.bapUri`/`context.bppUri`
+fields on outbound messages) now *do* point at this same domain+path —
+`terraform/cloud-run-wiring.tf` sets them to `https://${var.dedi_domain}/bap/receiver/`
+/ `.../bpp/receiver/`. This is required, not just cosmetic: other network
+participants POST callbacks to `{bapUri}/<action>` directly, and
+`bapTxnReceiver`/`bppTxnReceiver` only listen at `/bap/receiver/`/
+`/bpp/receiver/` (see `config/local-simple-bap.yaml`/`local-simple-bpp.yaml`)
+— a bare `bapUri` with no path would misroute every inbound callback.
+
+## Custom domains for bap, bap-frontend, bpp-frontend, and the landing page (optional)
+
+`terraform/domain-mapping.tf` also maps `bap` (`var.bap_domain`),
+`bap-frontend` (`var.bap_frontend_domain`), `bpp-frontend`
+(`var.bpp_frontend_domain`), and `landing-page` (`var.landing_page_domain`) to
+their own subdomains — same `google_cloud_run_domain_mapping` pattern,
+Search Console verification prerequisite, and **no-default treatment** as
+`dedi_domain` above: all four are required, `terraform plan` fails without
+them. Set all four in `terraform.tfvars` to subdomains you control before
+applying.
+
+`bpp` intentionally does **not** get its own separate domain — it shares
+`dedi-static-server`'s domain instead, via one more `location` block in
+`dedi-static-server/nginx.conf.template` (`/api/v1/` → `bpp`'s dashboard/
+provider-facing API, using the same envsubst'd-hostname proxy pattern as the
+`/bpp/receiver/`/`/bap/receiver/` blocks above). `bpp`'s other route group,
+`/api/webhook/*`, is reached internally by `onix-bpp` via `bpp`'s raw Cloud
+Run URL (`BPP_URL`, set by `cloud-run-wiring.tf`) and is deliberately not
+exposed on any public domain.
+
+After applying, get the DNS records for the four new domains the same way as
+`dedi_domain`:
+```sh
+terraform output bap_domain_dns_records
+terraform output bap_frontend_domain_dns_records
+terraform output bpp_frontend_domain_dns_records
+terraform output landing_page_domain_dns_records
+```
 
 ## Redeploy after a change
 

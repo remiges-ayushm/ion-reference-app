@@ -1,0 +1,41 @@
+# Copy this file to terraform.tfvars and fill in your own values.
+# terraform.tfvars is gitignored — never commit real values there.
+
+# --- Required, no default in variables.tf — terraform plan fails without these ---
+
+# Your registered BAP subscriber ID. Must match onix-bap's own keyManager
+# networkParticipant — see the comment on this variable in variables.tf.
+bap_id = "onix-bap-xxxxxxxxxx-xx.a.run.app"
+
+# Your registered BPP subscriber ID. Must match onix-bpp's own keyManager
+# networkParticipant.
+bpp_id = "sample-pn.your-domain.example"
+
+# The Beckn network you're registered on.
+network_id = "ion.id/ion-launch"
+
+# The external Beckn registry's discover endpoint (bap's outbound /discover call).
+cds_discover_url = "https://your-registry.example/beckn/discover"
+
+# Custom domains — also required, no default on purpose (same reasoning as
+# above: a hardcoded default is exactly how you'd end up deploying against a
+# domain you don't control). Each must be a VERIFIED domain in Search Console
+# under the same account/org that owns this GCP project before
+# `terraform apply` succeeds on its google_cloud_run_domain_mapping resource
+# — see README.md "Custom domain for DeDi discovery files" and the section
+# right after it.
+dedi_domain         = "your-domain.example"
+dedi_domain_www     = "www.your-domain.example"
+bap_domain          = "bap.your-domain.example"
+bap_frontend_domain = "shop.your-domain.example"
+bpp_frontend_domain = "seller.your-domain.example"
+landing_page_domain = "home.your-domain.example"
+
+# --- Commonly overridden (all have defaults in variables.tf) ---
+
+project_id = "your-gcp-project-id"
+region     = "asia-southeast1"
+
+# Only needed if the default subnet_cidr (10.10.0.0/24) collides with
+# something already in your VPC — see variables.tf for the constraint.
+# subnet_cidr = "10.30.0.0/24"

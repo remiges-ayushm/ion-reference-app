@@ -42,6 +42,35 @@ output "landing_page_url" {
   description = "Public URL — the entry-point page with buttons to the buyer and seller apps."
 }
 
+output "dedi_domain_url" {
+  value       = "https://${var.dedi_domain}"
+  description = "Custom domain URL for the DeDi discovery chain / dedi-static-server (also serves bpp's /api/v1/* — see README)."
+}
+
+output "dedi_domain_www_url" {
+  value = "https://${var.dedi_domain_www}"
+}
+
+output "bap_domain_url" {
+  value       = "https://${var.bap_domain}"
+  description = "Custom domain URL for the bap backend."
+}
+
+output "bap_frontend_domain_url" {
+  value       = "https://${var.bap_frontend_domain}"
+  description = "Custom domain URL for the bap-frontend (buyer) app."
+}
+
+output "bpp_frontend_domain_url" {
+  value       = "https://${var.bpp_frontend_domain}"
+  description = "Custom domain URL for the bpp-frontend (seller) app."
+}
+
+output "landing_page_domain_url" {
+  value       = "https://${var.landing_page_domain}"
+  description = "Custom domain URL for the landing page."
+}
+
 output "dedi_domain_dns_records" {
   value       = google_cloud_run_domain_mapping.dedi_apex.status[0].resource_records
   description = "DNS records to create at your registrar for var.dedi_domain."
@@ -50,6 +79,26 @@ output "dedi_domain_dns_records" {
 output "dedi_domain_www_dns_records" {
   value       = google_cloud_run_domain_mapping.dedi_www.status[0].resource_records
   description = "DNS records to create at your registrar for var.dedi_domain_www."
+}
+
+output "bap_domain_dns_records" {
+  value       = google_cloud_run_domain_mapping.bap.status[0].resource_records
+  description = "DNS records to create at your registrar for var.bap_domain."
+}
+
+output "bap_frontend_domain_dns_records" {
+  value       = google_cloud_run_domain_mapping.bap_frontend.status[0].resource_records
+  description = "DNS records to create at your registrar for var.bap_frontend_domain."
+}
+
+output "bpp_frontend_domain_dns_records" {
+  value       = google_cloud_run_domain_mapping.bpp_frontend.status[0].resource_records
+  description = "DNS records to create at your registrar for var.bpp_frontend_domain."
+}
+
+output "landing_page_domain_dns_records" {
+  value       = google_cloud_run_domain_mapping.landing_page.status[0].resource_records
+  description = "DNS records to create at your registrar for var.landing_page_domain."
 }
 
 output "artifact_registry_repo" {

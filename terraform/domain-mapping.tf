@@ -44,3 +44,59 @@ resource "google_cloud_run_domain_mapping" "dedi_www" {
     route_name = google_cloud_run_v2_service.dedi_static.name
   }
 }
+
+resource "google_cloud_run_domain_mapping" "bap" {
+  name     = var.bap_domain
+  location = var.region
+  project  = var.project_id
+
+  metadata {
+    namespace = var.project_id
+  }
+
+  spec {
+    route_name = google_cloud_run_v2_service.bap.name
+  }
+}
+
+resource "google_cloud_run_domain_mapping" "bap_frontend" {
+  name     = var.bap_frontend_domain
+  location = var.region
+  project  = var.project_id
+
+  metadata {
+    namespace = var.project_id
+  }
+
+  spec {
+    route_name = google_cloud_run_v2_service.bap_frontend.name
+  }
+}
+
+resource "google_cloud_run_domain_mapping" "bpp_frontend" {
+  name     = var.bpp_frontend_domain
+  location = var.region
+  project  = var.project_id
+
+  metadata {
+    namespace = var.project_id
+  }
+
+  spec {
+    route_name = google_cloud_run_v2_service.bpp_frontend.name
+  }
+}
+
+resource "google_cloud_run_domain_mapping" "landing_page" {
+  name     = var.landing_page_domain
+  location = var.region
+  project  = var.project_id
+
+  metadata {
+    namespace = var.project_id
+  }
+
+  spec {
+    route_name = google_cloud_run_v2_service.landing_page.name
+  }
+}

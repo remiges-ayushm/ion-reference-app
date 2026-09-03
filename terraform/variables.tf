@@ -168,13 +168,31 @@ variable "cds_discover_url" {
 variable "dedi_domain" {
   description = "Apex domain the DeDi discovery chain is served on (e.g. ayushmatha.in)."
   type        = string
-  default     = "ion-ref-app.ayushmatha.in"
 }
 
 variable "dedi_domain_www" {
   description = "www subdomain variant, mapped to the same dedi-static-server service."
   type        = string
-  default     = "www.ion-ref-app.ayushmatha.in"
+}
+
+variable "bap_domain" {
+  description = "Custom domain for the bap backend."
+  type        = string
+}
+
+variable "bap_frontend_domain" {
+  description = "Custom domain for the bap-frontend (buyer) app."
+  type        = string
+}
+
+variable "bpp_frontend_domain" {
+  description = "Custom domain for the bpp-frontend (seller) app."
+  type        = string
+}
+
+variable "landing_page_domain" {
+  description = "Custom domain for the landing page."
+  type        = string
 }
 
 # --- Secrets ---
