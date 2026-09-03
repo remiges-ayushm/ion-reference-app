@@ -32,14 +32,18 @@ resource "null_resource" "wire_service_urls" {
     command     = <<-EOT
       set -euo pipefail
 
-      # BAP_URI/BPP_URI are the bare registered Subscriber URL (goes into
-      # context.bapUri/bppUri) — NOT the internal /bap/receiver or
-      # /bpp/receiver path. ADAPTER_URL/BPP_CALLER_URL are the actual call
-      # target our own apps POST to, and DO keep the /caller suffix.
+      # BAP_URI/BPP_URI are what other network participants use to route
+      # callbacks (e.g. {bapUri}/on_select) — they MUST include the receiver
+      # path (bapTxnReceiver/bppTxnReceiver are mounted at /bap/receiver/ and
+      # /bpp/receiver/ respectively, see config/local-simple-b*p.yaml),
+      # routed through the custom domain via dedi-static-server's nginx
+      # proxy rules. ADAPTER_URL/BPP_CALLER_URL are the internal call target
+      # our own apps POST to directly (bare Cloud Run URL + /bap/caller, no
+      # domain needed — service-to-service within the same project).
       gcloud run services update ${google_cloud_run_v2_service.bap.name} \
         --project=${var.project_id} --region=${var.region} --quiet \
         --container=bap \
-        --update-env-vars="BAP_URI=${google_cloud_run_v2_service.onix_bap.uri},ADAPTER_URL=${google_cloud_run_v2_service.onix_bap.uri}/bap/caller"
+        --update-env-vars="BAP_URI=https://${var.dedi_domain}/bap/receiver/,ADAPTER_URL=${google_cloud_run_v2_service.onix_bap.uri}/bap/caller"
 
       gcloud run services update ${google_cloud_run_v2_service.onix_bap.name} \
         --project=${var.project_id} --region=${var.region} --quiet \
@@ -48,7 +52,7 @@ resource "null_resource" "wire_service_urls" {
       gcloud run services update ${google_cloud_run_v2_service.bpp.name} \
         --project=${var.project_id} --region=${var.region} --quiet \
         --container=bpp \
-        --update-env-vars="BPP_URI=${google_cloud_run_v2_service.onix_bpp.uri},BPP_CALLER_URL=${google_cloud_run_v2_service.onix_bpp.uri}/bpp/caller"
+        --update-env-vars="BPP_URI=https://${var.dedi_domain}/bpp/receiver/,BPP_CALLER_URL=${google_cloud_run_v2_service.onix_bpp.uri}/bpp/caller"
 
       gcloud run services update ${google_cloud_run_v2_service.onix_bpp.name} \
         --project=${var.project_id} --region=${var.region} --quiet \
