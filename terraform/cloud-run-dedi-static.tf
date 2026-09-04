@@ -48,6 +48,30 @@ resource "google_cloud_run_v2_service" "dedi_static" {
         value = trimprefix(google_cloud_run_v2_service.bpp.uri, "https://")
       }
 
+      env {
+        name  = "BAP_HOST"
+        value = trimprefix(google_cloud_run_v2_service.bap.uri, "https://")
+      }
+
+      # server_name values for nginx's host-based virtual routing — see
+      # nginx.conf.template. dedi_domain/dedi_domain_www share one server
+      # block; bap_domain gets its own (it's a separate hub, routing
+      # /bap/receiver/ to onix-bap and everything else to bap directly).
+      env {
+        name  = "DEDI_DOMAIN"
+        value = var.dedi_domain
+      }
+
+      env {
+        name  = "DEDI_DOMAIN_WWW"
+        value = var.dedi_domain_www
+      }
+
+      env {
+        name  = "BAP_DOMAIN"
+        value = var.bap_domain
+      }
+
       ports {
         container_port = 80
       }

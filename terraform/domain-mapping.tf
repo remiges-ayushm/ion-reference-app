@@ -45,6 +45,11 @@ resource "google_cloud_run_domain_mapping" "dedi_www" {
   }
 }
 
+# bap_domain is a hub, not a direct 1:1 mapping — it routes to
+# dedi-static-server, whose nginx (server_name-differentiated, see
+# nginx.conf.template) sends /bap/receiver/ to onix-bap (validated) and
+# everything else straight to bap. Mirrors how dedi_domain already works
+# for bpp/onix-bpp.
 resource "google_cloud_run_domain_mapping" "bap" {
   name     = var.bap_domain
   location = var.region
@@ -55,7 +60,7 @@ resource "google_cloud_run_domain_mapping" "bap" {
   }
 
   spec {
-    route_name = google_cloud_run_v2_service.bap.name
+    route_name = google_cloud_run_v2_service.dedi_static.name
   }
 }
 

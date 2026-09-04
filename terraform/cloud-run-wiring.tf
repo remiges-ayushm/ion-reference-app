@@ -35,19 +35,22 @@ resource "null_resource" "wire_service_urls" {
       # BAP_URI/BPP_URI are what other network participants use to route
       # callbacks (e.g. {bapUri}/on_select) — they MUST include the receiver
       # path (bapTxnReceiver/bppTxnReceiver are mounted at /bap/receiver/ and
-      # /bpp/receiver/ respectively, see config/local-simple-b*p.yaml),
-      # routed through the custom domain via dedi-static-server's nginx
-      # proxy rules. ADAPTER_URL/BPP_CALLER_URL are the internal call target
-      # our own apps POST to directly (bare Cloud Run URL + /bap/caller, no
-      # domain needed — service-to-service within the same project).
+      # /bpp/receiver/ respectively, see config/local-simple-b*p.yaml).
+      # BAP_URI uses bap_domain (its own hub, see domain-mapping.tf/
+      # nginx.conf.template) — BPP_URI uses dedi_domain, since bpp shares
+      # that hub instead of having its own domain. ADAPTER_URL/BPP_CALLER_URL
+      # are the internal call target our own apps POST to directly (bare
+      # Cloud Run URL + /bap/caller, no domain needed — service-to-service
+      # within the same project, and a deliberate security boundary: the
+      # caller modules have no inbound signature validation, see README.md).
       gcloud run services update ${google_cloud_run_v2_service.bap.name} \
         --project=${var.project_id} --region=${var.region} --quiet \
         --container=bap \
-        --update-env-vars="BAP_URI=https://${var.dedi_domain}/bap/receiver/,ADAPTER_URL=${google_cloud_run_v2_service.onix_bap.uri}/bap/caller"
+        --update-env-vars="BAP_URI=https://${var.bap_domain}/bap/receiver/,ADAPTER_URL=${google_cloud_run_v2_service.onix_bap.uri}/bap/caller"
 
       gcloud run services update ${google_cloud_run_v2_service.onix_bap.name} \
         --project=${var.project_id} --region=${var.region} --quiet \
-        --update-env-vars="BAP_URL=${google_cloud_run_v2_service.bap.uri}"
+        --update-env-vars="BAP_URL=https://${var.bap_domain}"
 
       gcloud run services update ${google_cloud_run_v2_service.bpp.name} \
         --project=${var.project_id} --region=${var.region} --quiet \
@@ -56,7 +59,7 @@ resource "null_resource" "wire_service_urls" {
 
       gcloud run services update ${google_cloud_run_v2_service.onix_bpp.name} \
         --project=${var.project_id} --region=${var.region} --quiet \
-        --update-env-vars="BPP_URL=${google_cloud_run_v2_service.bpp.uri}"
+        --update-env-vars="BPP_URL=https://${var.dedi_domain}"
     EOT
   }
 

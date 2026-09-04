@@ -102,10 +102,11 @@ resource "google_cloud_run_v2_service" "bap" {
         value = var.bpp_id
       }
       env {
-        # Bare registered Subscriber URL for onix-bpp, not the internal
-        # /bpp/receiver path — this goes straight into context.bppUri.
+        # bap's own record of BPP's identity, goes into context.bppUri —
+        # matches what bpp itself advertises as BPP_URI (cloud-run-wiring.tf),
+        # the custom domain + receiver path, not the bare onix-bpp URL.
         name  = "BPP_URI"
-        value = google_cloud_run_v2_service.onix_bpp.uri
+        value = "https://${var.dedi_domain}/bpp/receiver/"
       }
       env {
         name  = "CDS_DISCOVER_URL"

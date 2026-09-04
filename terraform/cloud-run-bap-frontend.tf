@@ -35,7 +35,7 @@ resource "google_cloud_run_v2_service" "bap_frontend" {
 
       env {
         name  = "BAP_URL"
-        value = google_cloud_run_v2_service.bap.uri
+        value = "https://${var.bap_domain}"
       }
       env {
         name  = "NGINX_RESOLVER"
