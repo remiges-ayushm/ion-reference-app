@@ -73,10 +73,7 @@ Chicken-and-egg: Terraform can't create the bucket it stores its own state
 in, so this is a one-time manual step.
 
 ```sh
-gcloud storage buckets create gs://<YOUR_PROJECT_ID>-tfstate \
-  --project=<YOUR_PROJECT_ID> --location=<YOUR_REGION> \
-  --uniform-bucket-level-access
-gcloud storage buckets update gs://<YOUR_PROJECT_ID>-tfstate --versioning
+task deploy:state-bucket PROJECT_ID=<YOUR_PROJECT_ID> REGION=<YOUR_REGION>
 ```
 
 ### 2. Create `terraform/terraform.tfvars`
@@ -102,12 +99,7 @@ Terraform computes that URL itself.
 ### 3. Bootstrap APIs, Artifact Registry, and empty secret containers
 
 ```sh
-cd terraform
-terraform init
-terraform plan -target=google_project_service.apis \
-  -target=google_artifact_registry_repository.repo \
-  -target=google_secret_manager_secret.this -out=bootstrap1.tfplan
-terraform apply bootstrap1.tfplan
+task deploy:bootstrap-apis
 ```
 
 ### 4. Seed secrets
@@ -128,10 +120,10 @@ PROJECT_ID=<YOUR_PROJECT_ID> \
   ../scripts/seed-secrets.sh
 ```
 
-### 5. Build and push all 10 images
+### 5. Build and push all 11 images
 
 ```sh
-PROJECT_ID=<YOUR_PROJECT_ID> REGION=<YOUR_REGION> ../scripts/build-and-push.sh
+task deploy:build-all PROJECT_ID=<YOUR_PROJECT_ID> REGION=<YOUR_REGION>
 ```
 
 ### 6. Create the network, Cloud SQL, and Redis
@@ -140,15 +132,7 @@ Cloud SQL private-IP creation is slow (budget 5–10 minutes), which is why
 it's sequenced as its own targeted apply:
 
 ```sh
-terraform plan -target=google_compute_network.vpc \
-  -target=google_compute_subnetwork.subnet \
-  -target=google_compute_global_address.psa_range \
-  -target=google_service_networking_connection.psa \
-  -target=google_sql_database_instance.postgres \
-  -target=google_redis_instance.redis \
-  -target=google_compute_subnetwork_iam_member.network_user \
-  -target=google_project_iam_member.cloud_sql_client -out=bootstrap2.tfplan
-terraform apply bootstrap2.tfplan
+task deploy:infra
 ```
 
 ### 7. First full apply — expect it to fail on `bap`/`bpp`
@@ -157,22 +141,19 @@ The databases have no schema yet, and both apps exit if a required startup
 query fails. This is normal for a first deploy:
 
 ```sh
-terraform plan -out=full.tfplan
-terraform apply full.tfplan
+task deploy:full-apply
 ```
 
 ### 8. Run migrations
 
 ```sh
-gcloud run jobs execute migrate-bap --project=<YOUR_PROJECT_ID> --region=<YOUR_REGION> --wait
-gcloud run jobs execute migrate-bpp --project=<YOUR_PROJECT_ID> --region=<YOUR_REGION> --wait
+task deploy:migrate
 ```
 
 ### 9. Re-apply
 
 ```sh
-terraform plan -out=full2.tfplan
-terraform apply full2.tfplan
+task deploy:full-apply
 ```
 
 `bap`/`bpp` should now start successfully against the real schema.
@@ -356,29 +337,39 @@ then `terraform apply` as usual.
 Cloud Run pins each service to a specific image digest at deploy time, and
 every Cloud Run resource in this module has a `lifecycle { ignore_changes =
 [...] }` block on its image — so pushing a new image under the same
-`:latest` tag does nothing to an already-running service. Pushing under a
-new tag and passing that tag to `terraform apply` is what forces a redeploy:
+`:latest` tag does nothing to an already-running service. **A plain
+`terraform apply`, even with a new `image_tag`, does not force a redeploy
+either** — `ignore_changes` blocks that field regardless of where the new
+value comes from. What actually forces a new revision is
+`gcloud run services update --image=...` directly, bypassing Terraform for
+that one field — which is exactly what the per-service Task commands below
+do, so you never need to touch `image_tag` at all:
 
 ```sh
-PROJECT_ID=<YOUR_PROJECT_ID> REGION=<YOUR_REGION> ./scripts/build-and-push.sh "$(git rev-parse --short HEAD)"
-cd terraform
-terraform apply -var="image_tag=$(git rev-parse --short HEAD)"
+task redeploy:bap-frontend   # only rebuilds/redeploys bap-frontend
+task redeploy:bpp            # only rebuilds/redeploys bpp
+task redeploy:all            # rebuilds/redeploys every service (not the migrate jobs)
+```
+
+Every service has its own `redeploy:<service>` task (`task --list` shows
+them all) — see `Taskfile.yaml` for the full set, or run the equivalent
+commands by hand:
+```sh
+docker build -t <YOUR_REGION>-docker.pkg.dev/<YOUR_PROJECT_ID>/beckn-app/<service>:$(git rev-parse --short HEAD) <service-dir>/
+docker push <YOUR_REGION>-docker.pkg.dev/<YOUR_PROJECT_ID>/beckn-app/<service>:$(git rev-parse --short HEAD)
+gcloud run services update <service> --project=<YOUR_PROJECT_ID> --region=<YOUR_REGION> \
+  --container=<container-name> --image=<YOUR_REGION>-docker.pkg.dev/<YOUR_PROJECT_ID>/beckn-app/<service>:$(git rev-parse --short HEAD)
 ```
 
 ### Database migration added
 
-The migrate *jobs* have the same `ignore_changes` lifecycle, so the
-`image_tag` apply above won't touch them — update and re-run each job
+The migrate *jobs* have the same `ignore_changes` lifecycle, so
+`redeploy:all` above doesn't touch them — update and re-run each job
 explicitly:
 
 ```sh
-gcloud run jobs update migrate-bap --project=<YOUR_PROJECT_ID> --region=<YOUR_REGION> \
-  --image="<YOUR_REGION>-docker.pkg.dev/<YOUR_PROJECT_ID>/beckn-app/bap-application-migrate:$(git rev-parse --short HEAD)"
-gcloud run jobs execute migrate-bap --project=<YOUR_PROJECT_ID> --region=<YOUR_REGION> --wait
-
-gcloud run jobs update migrate-bpp --project=<YOUR_PROJECT_ID> --region=<YOUR_REGION> \
-  --image="<YOUR_REGION>-docker.pkg.dev/<YOUR_PROJECT_ID>/beckn-app/bpp-application-migrate:$(git rev-parse --short HEAD)"
-gcloud run jobs execute migrate-bpp --project=<YOUR_PROJECT_ID> --region=<YOUR_REGION> --wait
+task redeploy:migrate-bap
+task redeploy:migrate-bpp
 ```
 
 ### Terraform-only change (no new image)

@@ -72,3 +72,189 @@ tasks:
             echo "next_update in $FILE was in the past ($CURRENT); updated to $NEW_VALUE"
           fi
         fi
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Fresh deploy — mirrors README.md "Deploy to your fresh GCP project"
+  # steps 0-9. Run in order. Steps 0/2/4 aren't here (a one-time backend.tf
+  # text edit, a tfvars file, and real secret key material — nothing to
+  # script safely). deploy:state-bucket and deploy:build-all need explicit
+  # PROJECT_ID=/REGION= since no Terraform state exists yet to derive them
+  # from; everything after that self-derives from `terraform output`.
+  # ───────────────────────────────────────────────────────────────────────
+
+  deploy:state-bucket:
+    desc: "Step 1: create the GCS bucket Terraform stores state in. Usage: task deploy:state-bucket PROJECT_ID=... REGION=..."
+    requires:
+      vars: [PROJECT_ID, REGION]
+    cmds:
+      - gcloud storage buckets create gs://{{.PROJECT_ID}}-tfstate --project={{.PROJECT_ID}} --location={{.REGION}} --uniform-bucket-level-access
+      - gcloud storage buckets update gs://{{.PROJECT_ID}}-tfstate --versioning
+
+  deploy:bootstrap-apis:
+    desc: "Step 3: bootstrap APIs, Artifact Registry, and empty secret containers."
+    dir: terraform
+    cmds:
+      - terraform init
+      - terraform plan -target=google_project_service.apis -target=google_artifact_registry_repository.repo -target=google_secret_manager_secret.this -out=bootstrap1.tfplan
+      - terraform apply bootstrap1.tfplan
+
+  deploy:build-all:
+    desc: "Step 5: build and push every image. Usage: task deploy:build-all PROJECT_ID=... REGION=..."
+    requires:
+      vars: [PROJECT_ID, REGION]
+    cmds:
+      - PROJECT_ID={{.PROJECT_ID}} REGION={{.REGION}} ./scripts/build-and-push.sh
+
+  deploy:infra:
+    desc: "Step 6: create the network, Cloud SQL, and Redis (slow — budget 5-10 min)."
+    dir: terraform
+    cmds:
+      - terraform plan -target=google_compute_network.vpc -target=google_compute_subnetwork.subnet -target=google_compute_global_address.psa_range -target=google_service_networking_connection.psa -target=google_sql_database_instance.postgres -target=google_redis_instance.redis -target=google_compute_subnetwork_iam_member.network_user -target=google_project_iam_member.cloud_sql_client -out=bootstrap2.tfplan
+      - terraform apply bootstrap2.tfplan
+
+  deploy:full-apply:
+    desc: "Steps 7 & 9: full terraform apply. Run this task twice — the first run is expected to fail on bap/bpp (no DB schema yet); run deploy:migrate in between."
+    dir: terraform
+    cmds:
+      - terraform plan -out=full.tfplan
+      - terraform apply full.tfplan
+
+  deploy:migrate:
+    desc: "Step 8: run both migration jobs (self-derives PROJECT_ID/REGION — by this point terraform apply has run)."
+    vars:
+      PROJECT_ID:
+        sh: cd terraform && terraform output -raw project_id
+      REGION:
+        sh: cd terraform && terraform output -raw region
+    cmds:
+      - gcloud run jobs execute migrate-bap --project={{.PROJECT_ID}} --region={{.REGION}} --wait
+      - gcloud run jobs execute migrate-bpp --project={{.PROJECT_ID}} --region={{.REGION}} --wait
+
+  # ───────────────────────────────────────────────────────────────────────
+  # Per-service redeploy — each rebuilds, pushes, and forces a new revision
+  # via `gcloud run services update --image=...` directly, bypassing
+  # Terraform's `lifecycle { ignore_changes = [image] }` on purpose (a plain
+  # `terraform apply`, even with a new image_tag, will NOT redeploy — see
+  # README.md "Code change in any service"). Only the one service named
+  # rebuilds; every other service is untouched.
+  #
+  # All of them delegate to _redeploy-service, which self-derives
+  # PROJECT_ID/REGION/REGISTRY/TAG from `terraform output`/git — lazily,
+  # only when a redeploy task actually runs, so this has no effect on
+  # unrelated tasks (like sign-dedi-files) or on running before the first
+  # `terraform apply`.
+  # ───────────────────────────────────────────────────────────────────────
+
+  _redeploy-service:
+    internal: true
+    vars:
+      PROJECT_ID:
+        sh: cd terraform && terraform output -raw project_id
+      REGION:
+        sh: cd terraform && terraform output -raw region
+      REGISTRY:
+        sh: cd terraform && terraform output -raw artifact_registry_repo
+      TAG:
+        sh: git rev-parse --short HEAD
+    dir: '{{.CONTEXT_DIR}}'
+    cmds:
+      - docker build -t {{.REGISTRY}}/{{.IMAGE}}:{{.TAG}} -f {{.DOCKERFILE | default "Dockerfile"}} .
+      - docker push {{.REGISTRY}}/{{.IMAGE}}:{{.TAG}}
+      - gcloud run services update {{.SERVICE}} --project={{.PROJECT_ID}} --region={{.REGION}} --container={{.CONTAINER}} --image={{.REGISTRY}}/{{.IMAGE}}:{{.TAG}}
+
+  _redeploy-job:
+    internal: true
+    vars:
+      PROJECT_ID:
+        sh: cd terraform && terraform output -raw project_id
+      REGION:
+        sh: cd terraform && terraform output -raw region
+      REGISTRY:
+        sh: cd terraform && terraform output -raw artifact_registry_repo
+      TAG:
+        sh: git rev-parse --short HEAD
+    dir: '{{.CONTEXT_DIR}}'
+    cmds:
+      - docker build -t {{.REGISTRY}}/{{.IMAGE}}:{{.TAG}} -f {{.DOCKERFILE}} .
+      - docker push {{.REGISTRY}}/{{.IMAGE}}:{{.TAG}}
+      - gcloud run jobs update {{.JOB}} --project={{.PROJECT_ID}} --region={{.REGION}} --image={{.REGISTRY}}/{{.IMAGE}}:{{.TAG}}
+      - gcloud run jobs execute {{.JOB}} --project={{.PROJECT_ID}} --region={{.REGION}} --wait
+
+  redeploy:bap:
+    desc: Rebuild, push, and redeploy ONLY bap.
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: bap-application, IMAGE: bap-application, SERVICE: bap, CONTAINER: bap}
+
+  redeploy:bpp:
+    desc: Rebuild, push, and redeploy ONLY bpp.
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: bpp-application, IMAGE: bpp-application, SERVICE: bpp, CONTAINER: bpp}
+
+  redeploy:bap-frontend:
+    desc: Rebuild, push, and redeploy ONLY bap-frontend.
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: bap-frontend, IMAGE: bap-frontend, SERVICE: bap-frontend, CONTAINER: bap-frontend}
+
+  redeploy:bpp-frontend:
+    desc: Rebuild, push, and redeploy ONLY bpp-frontend.
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: bpp-frontend, IMAGE: bpp-frontend, SERVICE: bpp-frontend, CONTAINER: bpp-frontend}
+
+  redeploy:onix-bap:
+    desc: Rebuild, push, and redeploy ONLY onix-bap (Cloud Run service name is beckn-onix-bap).
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: onix-bap, IMAGE: onix-bap, SERVICE: beckn-onix-bap, CONTAINER: onix-bap}
+
+  redeploy:onix-bpp:
+    desc: Rebuild, push, and redeploy ONLY onix-bpp (Cloud Run service name is beckn-onix-bpp).
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: onix-bpp, IMAGE: onix-bpp, SERVICE: beckn-onix-bpp, CONTAINER: onix-bpp}
+
+  redeploy:onix-catalog-publish:
+    desc: Rebuild, push, and redeploy ONLY onix-catalog-publish.
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: onix-catalog-publish, IMAGE: onix-catalog-publish, SERVICE: onix-catalog-publish, CONTAINER: onix-catalog-publish}
+
+  redeploy:dedi-static-server:
+    desc: Rebuild, push, and redeploy ONLY dedi-static-server.
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: dedi-static-server, IMAGE: dedi-static-server, SERVICE: dedi-static-server, CONTAINER: dedi-static-server}
+
+  redeploy:landing-page:
+    desc: Rebuild, push, and redeploy ONLY landing-page.
+    cmds:
+      - task: _redeploy-service
+        vars: {CONTEXT_DIR: landing-page, IMAGE: landing-page, SERVICE: landing-page, CONTAINER: landing-page}
+
+  redeploy:migrate-bap:
+    desc: Rebuild, push, update, and run the bap migration job.
+    cmds:
+      - task: _redeploy-job
+        vars: {CONTEXT_DIR: bap-application, IMAGE: bap-application-migrate, DOCKERFILE: Dockerfile.migrate, JOB: migrate-bap}
+
+  redeploy:migrate-bpp:
+    desc: Rebuild, push, update, and run the bpp migration job.
+    cmds:
+      - task: _redeploy-job
+        vars: {CONTEXT_DIR: bpp-application, IMAGE: bpp-application-migrate, DOCKERFILE: Dockerfile.migrate, JOB: migrate-bpp}
+
+  redeploy:all:
+    desc: Rebuild and redeploy every service (not the two migrate jobs — those only run when a migration actually changed).
+    cmds:
+      - task: redeploy:bap
+      - task: redeploy:bpp
+      - task: redeploy:bap-frontend
+      - task: redeploy:bpp-frontend
+      - task: redeploy:onix-bap
+      - task: redeploy:onix-bpp
+      - task: redeploy:onix-catalog-publish
+      - task: redeploy:dedi-static-server
+      - task: redeploy:landing-page

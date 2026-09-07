@@ -1,3 +1,13 @@
+output "project_id" {
+  value       = var.project_id
+  description = "Bare passthrough of var.project_id — lets Taskfile.yaml's redeploy:* tasks self-derive it via terraform output, no manual entry needed."
+}
+
+output "region" {
+  value       = var.region
+  description = "Bare passthrough of var.region — same reason as project_id above."
+}
+
 output "bap_frontend_url" {
   value       = google_cloud_run_v2_service.bap_frontend.uri
   description = "Public URL — open this to use the BAP (buyer) app."

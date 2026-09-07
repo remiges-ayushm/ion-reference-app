@@ -86,95 +86,12 @@ URLs and the new instances' addresses.
 
 ## Bootstrap sequence
 
-1. One-time state bucket (chicken-and-egg — Terraform can't create the
-   bucket it stores its own state in):
-   ```sh
-   gcloud storage buckets create gs://ion-sandbox-001-tfstate \
-     --project=ion-sandbox-001 --location=asia-southeast2 \
-     --uniform-bucket-level-access
-   gcloud storage buckets update gs://ion-sandbox-001-tfstate --versioning
-   ```
-
-2. Create `terraform/terraform.tfvars` (not committed) with your project ID
-   and network identity (no defaults exist for the identity vars — see
-   Architecture notes above):
-   ```hcl
-   project_id       = "ion-sandbox-001"
-   bap_id           = "<your new onix-bap identity>"
-   bpp_id           = "<your new onix-bpp identity>"
-   network_id       = "<your registry's network id>"
-   cds_discover_url = "<your registry's discover URL>"
-   ```
-   No `cds_publish_url` here — `bpp`'s `CDS_PUBLISH_URL` is computed from the
-   `onix-catalog-publish` Cloud Run service this module deploys (a
-   same-project, same-operator service, not an external registry endpoint).
-   It reuses onix-bpp's `bpp-onix-*` secrets — nothing new to seed for it.
-
-3. Bootstrap the things later steps depend on:
-   ```sh
-   cd terraform
-   terraform init
-   terraform plan -target=google_project_service.apis \
-     -target=google_artifact_registry_repository.repo \
-     -target=google_secret_manager_secret.this -out=bootstrap1.tfplan
-   terraform apply bootstrap1.tfplan
-   ```
-
-4. Seed the 14 externally-provided secrets (everything except
-   `postgres-password`, which Terraform generates itself) — values for this
-   deployment's own separate registered identity:
-   ```sh
-   PROJECT_ID=ion-sandbox-001 \
-     BAP_PRIVATE_KEY=... BAP_KEY_ID=... BPP_PRIVATE_KEY=... BPP_KEY_ID=... \
-     BAP_ONIX_KEY_ID=... BAP_ONIX_SIGNING_PRIVATE_KEY=... BAP_ONIX_SIGNING_PUBLIC_KEY=... \
-     BAP_ONIX_ENCR_PRIVATE_KEY=... BAP_ONIX_ENCR_PUBLIC_KEY=... \
-     BPP_ONIX_KEY_ID=... BPP_ONIX_SIGNING_PRIVATE_KEY=... BPP_ONIX_SIGNING_PUBLIC_KEY=... \
-     BPP_ONIX_ENCR_PRIVATE_KEY=... BPP_ONIX_ENCR_PUBLIC_KEY=... \
-     ../scripts/seed-secrets.sh
-   ```
-   `BAP_PRIVATE_KEY`/`BAP_KEY_ID` MUST be the same keypair/identity as
-   `BAP_ONIX_SIGNING_PRIVATE_KEY`/`BAP_ONIX_KEY_ID` — see the network identity
-   note above.
-
-5. Build and push all 10 images:
-   ```sh
-   PROJECT_ID=ion-sandbox-001 REGION=asia-southeast2 ../scripts/build-and-push.sh
-   ```
-
-6. Create the VPC/subnet, Private Services Access peering, Cloud SQL
-   instance, and Redis instance (must exist before any `vpc_access` block
-   validates). Cloud SQL instance creation is slow — budget 5-10 minutes:
-   ```sh
-   terraform plan -target=google_compute_network.vpc \
-     -target=google_compute_subnetwork.subnet \
-     -target=google_compute_global_address.psa_range \
-     -target=google_service_networking_connection.psa \
-     -target=google_sql_database_instance.postgres \
-     -target=google_redis_instance.redis \
-     -target=google_compute_subnetwork_iam_member.network_user \
-     -target=google_project_iam_member.cloud_sql_client -out=bootstrap2.tfplan
-   terraform apply bootstrap2.tfplan
-   ```
-
-7. First full apply — **this will fail on `bap`/`bpp` the first time**, see
-   Gotchas below for why. That's expected:
-   ```sh
-   terraform plan -out=full.tfplan
-   terraform apply full.tfplan
-   ```
-
-8. Run migrations (the databases are empty until this runs — `bap`/`bpp`
-   crash-loop on startup without it):
-   ```sh
-   gcloud run jobs execute migrate-bap --project=ion-sandbox-001 --region=asia-southeast2 --wait
-   gcloud run jobs execute migrate-bpp --project=ion-sandbox-001 --region=asia-southeast2 --wait
-   ```
-
-9. Re-apply — this time `bap`/`bpp` start successfully against the now-real schema:
-   ```sh
-   terraform plan -out=full2.tfplan
-   terraform apply full2.tfplan
-   ```
+See [README.md](../README.md#deploy-to-your-fresh-gcp-project) for the full
+fresh-deploy walkthrough (Task commands, step by step). Its steps 1-9
+correspond 1:1 to the step numbers the Gotchas below reference — this file
+doesn't repeat that content, only what's distinct to it: architecture notes,
+the gotchas actually hit building this, verification, redeploying, and
+inspecting Cloud SQL.
 
 ## Gotchas actually hit doing this (not theoretical — each one broke a real deploy)
 
@@ -218,18 +135,20 @@ URLs and the new instances' addresses.
    `os.Exit(1)` if a required startup query fails against a table that
    doesn't exist. The migrate jobs (Cloud Run *jobs*, not services) get
    created fine in that same apply since jobs don't block on a health
-   check — run them, then re-apply. This is why the bootstrap sequence
-   above has an apply → migrate → apply-again shape instead of one apply.
-7. **The registered Subscriber URL and the onix module's listening path
-   must agree.** If a participant's registry entry is a bare URL (e.g.
-   `https://onix-bpp-xxx.a.run.app`, no path), other participants doing a
-   registry-based lookup will call `<that-bare-url>/<action-name>` directly
-   — e.g. `.../select` — not `<url>/bpp/receiver/select`. If your onix
-   adapter's receiver module is only configured to listen at `/bpp/receiver/`
-   (the vendor's default), that request 404s. This is a known, currently
-   **unresolved** issue — the real fix is either moving the receiver module
-   to listen at `/`, or re-registering with the `/receiver` suffix in the
-   URL, and hasn't been decided yet.
+   check — run them, then re-apply. This is why README.md's fresh-deploy
+   sequence has an apply → migrate → apply-again shape instead of one apply.
+7. **Resolved: the registered Subscriber URL and the onix module's
+   listening path must agree.** Used to be a problem: if a participant's
+   registry entry were a bare URL (e.g. `https://onix-bpp-xxx.a.run.app`, no
+   path), other participants doing a registry-based lookup would call
+   `<that-bare-url>/<action-name>` directly — e.g. `.../select` — not
+   `<url>/bpp/receiver/select`, 404ing against the onix adapter's actual
+   receiver path. Now fixed on both fronts that mattered: `context.bapUri`/
+   `bppUri` on our own outbound messages already include the receiver path
+   (`cloud-run-wiring.tf`, confirmed working via a real `/select` →
+   `/on_select` transaction), and the actual registered entry in
+   `dedi-onboarding-files/ion-scratch-registry.json` already has the path
+   baked in (`"url": "https://.../bpp/receiver/"`), not a bare URL.
 8. **Cloud Run pins an image tag to a specific digest at deploy time and
    never re-resolves it.** Pushing a new image under the same `:latest` tag
    does nothing to an already-running service/job — `lifecycle {
@@ -244,7 +163,7 @@ URLs and the new instances' addresses.
    service/job reads it — a `terraform apply` that touches an unrelated
    field on that resource is enough, since it creates a new revision.
 10. **Cloud SQL private-IP instance creation is slow.** Budget 5-10 minutes
-    for step 6 above — it's sequenced as its own targeted apply rather than
+    for README.md's step 6 — it's sequenced as its own targeted apply rather than
     bundled into the full apply, so a failure there is cheap to retry
     without churning any Cloud Run resource.
 11. **Subnet CIDR, the PSA reserved range, and Redis's reserved IP range must
@@ -260,8 +179,8 @@ URLs and the new instances' addresses.
     whether it can be removed.
 13. **Adding a new `google_cloud_run_v2_service` to an already-running
     deployment fails with `Image '...' not found`** unless its image was
-    built and pushed first. On a fresh deploy this never bites, since step 5
-    above builds every image before the first full apply — it only shows up
+    built and pushed first. On a fresh deploy this never bites, since
+    README.md's step 5 builds every image before the first full apply — it only shows up
     when a new service is added later, one at a time, with no "build all
     images" checkpoint to fall back on. Build and push that one image
     (`docker build`/`docker push` directly, or a full `build-and-push.sh`
@@ -285,13 +204,17 @@ URLs and the new instances' addresses.
 ## Redeploying after a code change
 
 ```sh
-PROJECT_ID=ion-sandbox-001 REGION=asia-southeast2 ../scripts/build-and-push.sh "$(git rev-parse --short HEAD)"
-terraform apply -var="image_tag=$(git rev-parse --short HEAD)"
+task redeploy:<service>   # e.g. task redeploy:bap-frontend — only that one service
+task redeploy:all         # every service, not the migrate jobs
 ```
 (The `lifecycle { ignore_changes = [...] }` block on each Cloud Run resource
-means a plain `terraform apply` with no tag change won't redeploy a new
-image — you must pass a new `image_tag`. For the two migrate jobs
-specifically, this doesn't apply the new image either — see Gotcha #8.)
+means **neither** a plain `terraform apply` **nor** one with a new
+`image_tag` var redeploys a new image — `ignore_changes` blocks that field
+regardless of where the new value comes from. `redeploy:<service>` sidesteps
+this entirely by calling `gcloud run services update --image=...` directly,
+same as every redeploy in this repo's own history actually uses. For the two
+migrate jobs specifically, use `task redeploy:migrate-bap`/`migrate-bpp` —
+see Gotcha #8.)
 
 ## Inspecting the Cloud SQL instance
 
